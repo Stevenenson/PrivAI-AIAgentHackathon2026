@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// Privacy posture: Firestore stores ONLY identity + a small device-status doc.
+// No chat content, no message history, no commands. The web app talks to
+// the device's FastAPI directly with a Firebase ID token.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      // Device-status doc — written authoritatively by the agent (Admin SDK
+      // bypasses these rules). The web client may also seed an empty doc and
+      // overwrite the boardUrl field; the agent overwrites everything else
+      // on its next heartbeat.
+      match /device/{doc} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+  }
+}

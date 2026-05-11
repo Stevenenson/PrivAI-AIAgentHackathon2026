@@ -1,0 +1,281 @@
+@import "tailwindcss";
+
+/* =====================================================================
+   Theme tokens — dark by default; [data-theme="light"] swaps to white.
+   Component classes use semantic names: bg-bg, bg-surface, bg-surface-2,
+   text-ink, text-ink-2, text-muted, border-line, bg-accent, bg-accent-soft.
+   ===================================================================== */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b0d12;
+  --surface: #11141a;
+  --surface-2: #181c24;
+  --surface-3: #20242e;
+  --line: #242935;
+  --line-strong: #2e3441;
+  --ink: #ececec;
+  --ink-2: #c0c5ce;
+  --muted: #8a90a0;
+  --accent: #4f8cff;
+  --accent-2: #6ba1ff;
+  --accent-soft: #1c2a4f;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #fafbfc;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
+  --ink: #0a0a0a;
+  --ink-2: #2a2a2a;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-2: #1d4ed8;
+  --accent-soft: #dbeafe;
+  --good: #16a34a;
+  --warn: #b58300;
+  --bad: #dc2626;
+}
+
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Iowan Old Style", Charter, Palatino, Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+input,
+textarea,
+select,
+button {
+  color-scheme: inherit;
+}
+
+/* ---- alpha-tinted helpers (Tailwind v4 alpha modifier doesn't compose
+   with var()-backed theme colors, so we expose explicit utilities). ---- */
+.bg-accent-tint {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.bg-accent-tint-strong {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.border-accent-line {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.ring-accent-soft {
+  --tw-ring-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.tone-good {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+  border-color: color-mix(in srgb, var(--good) 28%, transparent);
+}
+.tone-warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.tone-bad {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 28%, transparent);
+}
+
+/* Streaming caret */
+.caret::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 2px;
+  animation: blink 1s steps(1) infinite;
+  color: var(--accent);
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.msg-enter {
+  animation: msg-in 200ms ease-out both;
+}
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.prose pre {
+  background: var(--surface-2);
+  color: var(--ink);
+  padding: 0.9rem 1rem;
+  border-radius: 10px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  border: 1px solid var(--line);
+}
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-body {
+  white-space: normal;
+  color: var(--ink);
+}
+.markdown-body > * + * {
+  margin-top: 0.85rem;
+}
+.markdown-body p {
+  margin: 0;
+  line-height: 1.75;
+}
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 1rem 0 0.35rem;
+  color: var(--ink);
+  font-weight: 750;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.markdown-body h3 {
+  font-size: 1.05rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+.markdown-body h4 {
+  font-size: 0.98rem;
+}
+.markdown-body ul,
+.markdown-body ol {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.45rem 0 0;
+  padding-left: 1.2rem;
+}
+.markdown-body ul {
+  list-style: disc;
+}
+.markdown-body ol {
+  list-style: decimal;
+}
+.markdown-body li {
+  padding-left: 0.15rem;
+  line-height: 1.65;
+}
+.markdown-body li::marker {
+  color: var(--accent);
+  font-weight: 700;
+}
+.markdown-body strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+.markdown-body em {
+  color: var(--ink-2);
+}
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+.markdown-body a:hover {
+  color: var(--accent-2);
+}
+.answer-section {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
+}
+.answer-section-title {
+  margin-bottom: 0.25rem;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 750;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.answer-section p {
+  color: var(--ink-2);
+}

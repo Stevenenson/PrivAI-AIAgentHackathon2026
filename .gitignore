@@ -1,0 +1,35 @@
+.venv/
+.env
+.env.local
+__pycache__/
+*.pyc
+build/
+dist-backend/
+privai-backend.spec
+data/chat.db
+data/attachments/
+data/cache/
+data/logs/
+searxng/
+.DS_Store
+.claude/
+.idea/
+.vscode/
+
+# Web app
+web/.next/
+web/node_modules/
+web/.env.local
+web/dist/
+web/out/
+
+# Agent
+agent/node_modules/
+agent/.env
+agent/service-account.json
+agent/*.log
+
+# Firebase
+.firebase/
+firebase-debug.log
+*.firebase-debug.log

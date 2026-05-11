@@ -1,0 +1,948 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privai User Guide Booklet</title>
+  <style>
+    :root {
+      --ink: #111827;
+      --ink-2: #374151;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --paper: #ffffff;
+      --surface: #f8fafc;
+      --surface-2: #eef2ff;
+      --accent: #2563eb;
+      --accent-2: #1d4ed8;
+      --good: #16a34a;
+      --warn: #b7791f;
+      --bad: #dc2626;
+      --dot: #6b7280;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: #eef1f6;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    body {
+      margin: 0;
+    }
+
+    .book {
+      width: min(100%, 980px);
+      margin: 32px auto;
+      background: var(--paper);
+      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.14);
+    }
+
+    .page {
+      padding: 56px 64px;
+      border-bottom: 1px solid var(--line);
+      break-after: page;
+    }
+
+    .page:last-child {
+      border-bottom: 0;
+    }
+
+    .cover {
+      min-height: 760px;
+      display: grid;
+      align-content: center;
+      gap: 28px;
+      background:
+        radial-gradient(circle at 86% 14%, rgba(37, 99, 235, 0.15), transparent 28%),
+        radial-gradient(circle at 8% 92%, rgba(22, 163, 74, 0.12), transparent 24%),
+        var(--paper);
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: baseline;
+      font-size: clamp(54px, 11vw, 112px);
+      line-height: 0.85;
+      font-weight: 900;
+      letter-spacing: -0.05em;
+    }
+
+    .logo .dot {
+      color: var(--dot);
+      letter-spacing: -0.1em;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.12;
+    }
+
+    h1 {
+      font-size: clamp(38px, 6vw, 58px);
+      letter-spacing: -0.04em;
+    }
+
+    h2 {
+      margin-bottom: 18px;
+      font-size: 32px;
+      letter-spacing: -0.03em;
+    }
+
+    h3 {
+      margin-top: 26px;
+      margin-bottom: 8px;
+      font-size: 19px;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--ink-2);
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--surface);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 19px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .toc {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+      padding: 0;
+      list-style: none;
+      counter-reset: toc;
+    }
+
+    .toc li {
+      counter-increment: toc;
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    .toc li::before {
+      content: counter(toc);
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+    }
+
+    .card strong {
+      color: var(--ink);
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border: 1px solid #bfdbfe;
+      border-radius: 14px;
+      background: #eff6ff;
+      color: #1e3a8a;
+    }
+
+    .callout.good {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+      color: #166534;
+    }
+
+    .callout.warn {
+      border-color: #fde68a;
+      background: #fffbeb;
+      color: #92400e;
+    }
+
+    .steps {
+      display: grid;
+      gap: 24px;
+      counter-reset: step;
+    }
+
+    .step {
+      counter-increment: step;
+      display: grid;
+      gap: 16px;
+    }
+
+    .step-title {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .step-title::before {
+      content: counter(step);
+      display: grid;
+      width: 36px;
+      height: 36px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 10px;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+    }
+
+    figure {
+      margin: 0;
+    }
+
+    .shot {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface);
+    }
+
+    .shot object,
+    .shot img {
+      display: block;
+      width: 100%;
+      min-height: 220px;
+      max-height: 520px;
+      object-fit: contain;
+      background: white;
+    }
+
+    .shot-placeholder {
+      display: grid;
+      min-height: 240px;
+      place-items: center;
+      padding: 28px;
+      color: var(--muted);
+      text-align: center;
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 45%),
+        white;
+    }
+
+    figcaption {
+      padding: 12px 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+      background: #ffffff;
+    }
+
+    .feature-list {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .feature {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .feature b {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+    }
+
+    .feature p {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .checklist {
+      display: grid;
+      gap: 8px;
+      padding-left: 0;
+      list-style: none;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 28px;
+      color: var(--ink-2);
+    }
+
+    .checklist li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: inset 0 0 0 5px white;
+      border: 1px solid var(--accent);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      background: var(--surface);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .footer-note {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .book {
+        margin: 0;
+        box-shadow: none;
+      }
+
+      .page {
+        padding: 32px 20px;
+      }
+
+      .grid.two,
+      .feature-list {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      html {
+        background: white;
+      }
+
+      .book {
+        width: 100%;
+        margin: 0;
+        box-shadow: none;
+      }
+
+      .page {
+        min-height: 100vh;
+        padding: 42px 48px;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="book">
+    <section class="page cover">
+      <div class="meta">User guide booklet</div>
+      <div class="logo" aria-label="Privai">Privai<span class="dot">.</span></div>
+      <h1>Your private local AI workspace</h1>
+      <p class="subtitle">
+        A guided introduction to setting up Privai, connecting your board,
+        choosing a local model, understanding privacy, and using chat modes:
+        web, agent, convert, and attachments.
+      </p>
+      <div class="grid two">
+        <div class="card">
+          <strong>For first-time users</strong>
+          <p>
+            Follow the guide from the starting page to your first conversation.
+            Each section explains what you see and what to do next.
+          </p>
+        </div>
+        <div class="card">
+          <strong>Privacy-first by design</strong>
+          <p>
+            Chat content, uploaded files, converted files, and model inference
+            stay on the device. Firebase is used only for identity and device
+            heartbeat metadata.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="page">
+      <h2>Contents</h2>
+      <ol class="toc">
+        <li>
+          <div>
+            <strong>Start at the home screen</strong>
+            <p>Meet the main layout: sidebar, model status, and composer.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Connect your board in Settings</strong>
+            <p>Set the device URL, verify reachability, and pair your account.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Choose and manage your model</strong>
+            <p>Use the Device page to start/stop Ollama and switch models.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Read How it works</strong>
+            <p>Learn the architecture, privacy model, storage, and commands.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Start chatting</strong>
+            <p>Understand web, agent, convert, and attachments before sending.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="page">
+      <h2>1. Start at the home screen</h2>
+      <figure class="shot">
+        <object data="assets/user-guide/01-starting-page.png" type="image/png">
+          <div class="shot-placeholder">
+            Screenshot 1 placeholder: the Privai starting page with sidebar,
+            New chat button, board status, greeting, and bottom composer.
+          </div>
+        </object>
+        <figcaption>
+          Figure 1 - The starting page. The left sidebar keeps navigation and
+          conversations visible, while the main area invites you to start a new
+          local chat.
+        </figcaption>
+      </figure>
+
+      <h3>What you see</h3>
+      <ul class="checklist">
+        <li>The Privai logo in the top-left corner.</li>
+        <li>A blue <b>New chat</b> button for creating a fresh conversation.</li>
+        <li>The conversation list, which is empty on first use.</li>
+        <li>Navigation links for <b>Device</b>, <b>How it works</b>, and <b>Settings</b>.</li>
+        <li>The account panel at the bottom with theme and sign-out controls.</li>
+        <li>A model status pill in the top-right showing whether Ollama is idle or loaded.</li>
+        <li>The composer at the bottom, where you type messages and choose modes.</li>
+      </ul>
+
+      <div class="callout">
+        Before the first real chat, connect the web app to your backend device
+        in Settings. The web app is only the interface; the model, database,
+        attachments, and conversion tools live on the device.
+      </div>
+    </section>
+
+    <section class="page">
+      <h2>2. Connect your board in Settings</h2>
+      <figure class="shot">
+        <object data="assets/user-guide/02-settings-connect-board.png" type="image/png">
+          <div class="shot-placeholder">
+            Screenshot 2 placeholder: Settings page with Device URL, reachable
+            status, pairing confirmation, account, and privacy posture.
+          </div>
+        </object>
+        <figcaption>
+          Figure 2 - The Settings page. This is where you tell the web app
+          where your board or local FastAPI backend is running.
+        </figcaption>
+      </figure>
+
+      <h3>Step-by-step</h3>
+      <ol>
+        <li>
+          Open <b>Settings</b> from the sidebar.
+        </li>
+        <li>
+          In <b>Device URL</b>, enter the backend URL. During local development
+          this is usually <code>http://127.0.0.1:8080</code>.
+        </li>
+        <li>
+          Click <b>Save</b>. If the backend is online, the page shows
+          <b>reachable</b> and the active model name.
+        </li>
+        <li>
+          Pair your account using the code printed by the backend on first
+          boot. After pairing, only your Firebase account can talk to this
+          device.
+        </li>
+      </ol>
+
+      <h3>Why pairing matters</h3>
+      <p>
+        Privai is designed so the browser talks directly to the device. Firebase
+        handles sign-in, but the device still verifies that the request belongs
+        to the paired owner. That prevents another signed-in account from using
+        your local model or reading your local chat database.
+      </p>
+
+      <div class="callout good">
+        The privacy posture box is important: chat content is not sent to
+        Firebase. Conversations live in SQLite on the device, and uploaded or
+        converted files live in local attachment storage.
+      </div>
+    </section>
+
+    <section class="page">
+      <h2>3. Choose a model on the Device page</h2>
+      <figure class="shot">
+        <object data="assets/user-guide/03-device-model-picker.png" type="image/png">
+          <div class="shot-placeholder">
+            Screenshot 3 placeholder: Device page with LLM lifecycle controls,
+            model picker, RAM usage, Ollama status, SearXNG status, heartbeat,
+            and agent version.
+          </div>
+        </object>
+        <figcaption>
+          Figure 3 - The Device page. Use this page to start or stop the local
+          LLM and choose which installed Ollama model Privai should use.
+        </figcaption>
+      </figure>
+
+      <h3>LLM lifecycle</h3>
+      <p>
+        The LLM lifecycle card controls whether the selected model is loaded in
+        memory. When the model is loaded, Privai can answer faster but uses RAM.
+        When stopped, RAM is freed and the next response may take longer.
+      </p>
+
+      <h3>Model picker</h3>
+      <p>
+        The model picker reads installed Ollama models from the device. Choose a
+        model based on your hardware and the task:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Model type</th>
+            <th>Best for</th>
+            <th>Tradeoff</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Small text model</td>
+            <td>Fast chat, summaries, simple reasoning</td>
+            <td>Weaker at long HTML artifacts and complex instructions</td>
+          </tr>
+          <tr>
+            <td>Larger text model</td>
+            <td>Better writing, code, and website artifacts</td>
+            <td>Uses more RAM and runs slower</td>
+          </tr>
+          <tr>
+            <td>Vision model</td>
+            <td>Understanding attached images</td>
+            <td>Must be installed separately, for example with Ollama</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        If a model is not listed, install it on the device first, for example
+        with <code>ollama pull qwen2.5:7b</code>, then click Refresh.
+      </div>
+    </section>
+
+    <section class="page">
+      <h2>4. Read the How it works tab</h2>
+      <figure class="shot">
+        <object data="assets/user-guide/04-how-it-works.png" type="image/png">
+          <div class="shot-placeholder">
+            Screenshot 4 placeholder: How it works page explaining privacy,
+            send flow, device storage, search, model inference, and conversion.
+          </div>
+        </object>
+        <figcaption>
+          Figure 4 - The How it works page. This is the built-in technical
+          guide for understanding what data goes where.
+        </figcaption>
+      </figure>
+
+      <h3>What this page teaches</h3>
+      <div class="grid two">
+        <div class="card">
+          <strong>Privacy architecture</strong>
+          <p>
+            It explains that Firebase is used for identity, while conversations
+            and files stay on your device.
+          </p>
+        </div>
+        <div class="card">
+          <strong>Send flow</strong>
+          <p>
+            It shows how the browser sends a signed request to your device and
+            how the device verifies ownership before running the model.
+          </p>
+        </div>
+        <div class="card">
+          <strong>Web search behavior</strong>
+          <p>
+            It clarifies that web mode uses local SearXNG and that search
+            queries may leave the device when sent to upstream search engines.
+          </p>
+        </div>
+        <div class="card">
+          <strong>Local conversion</strong>
+          <p>
+            It explains why converting sensitive files locally is safer than
+            uploading them to public converter websites.
+          </p>
+        </div>
+      </div>
+
+      <div class="callout">
+        This tab is written as a specification, not marketing. Use it when you
+        need to explain the system to evaluators, classmates, or anyone asking
+        where the data goes.
+      </div>
+    </section>
+
+    <section class="page">
+      <h2>5. Start a new chat</h2>
+      <figure class="shot">
+        <object data="assets/user-guide/05-new-chat-composer.png" type="image/png">
+          <div class="shot-placeholder">
+            Screenshot 5 placeholder: the chat composer with web, agent,
+            convert, attachment, text input, send button, and context meter.
+          </div>
+        </object>
+        <figcaption>
+          Figure 5 - The chat composer. This is where most daily work happens:
+          ask questions, attach files, search the web, build artifacts, or
+          convert files locally.
+        </figcaption>
+      </figure>
+
+      <h3>The four controls in the composer</h3>
+      <div class="feature-list">
+        <div class="feature">
+          <b>Web</b>
+          <p>
+            Adds current context from local SearXNG search. Use it for news,
+            recent facts, product versions, citations, or anything that might
+            have changed.
+          </p>
+        </div>
+        <div class="feature">
+          <b>Agent</b>
+          <p>
+            Build mode. Use it when you want a website, calculator, game,
+            chart, HTML artifact, or code-like output. Agent mode follows local
+            build guidelines.
+          </p>
+        </div>
+        <div class="feature">
+          <b>Convert</b>
+          <p>
+            Local file conversion. Attach a file, choose convert, then type
+            something like <code>to pdf</code> or <code>to heic</code>.
+          </p>
+        </div>
+        <div class="feature">
+          <b>Attachments</b>
+          <p>
+            Add images, PDFs, text files, or documents. Attachments stay on the
+            device and can be used for chat, vision, document context, or
+            conversion.
+          </p>
+        </div>
+      </div>
+
+      <h3>Examples</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>What you want</th>
+            <th>What to click</th>
+            <th>Example prompt</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Ask a private local question</td>
+            <td>Nothing extra</td>
+            <td><code>Summarize this idea in simple Romanian.</code></td>
+          </tr>
+          <tr>
+            <td>Get current sources</td>
+            <td>Web</td>
+            <td><code>Find recent sources about local AI privacy.</code></td>
+          </tr>
+          <tr>
+            <td>Build a website</td>
+            <td>Agent</td>
+            <td><code>Build a colorful minimal website about AI bias with sources.</code></td>
+          </tr>
+          <tr>
+            <td>Use a PDF as context</td>
+            <td>Attach PDF</td>
+            <td><code>Use this PDF to create a study guide.</code></td>
+          </tr>
+          <tr>
+            <td>Understand an image</td>
+            <td>Attach image</td>
+            <td><code>What do you see in this image?</code></td>
+          </tr>
+          <tr>
+            <td>Convert a file privately</td>
+            <td>Convert + Attach</td>
+            <td><code>to pdf</code> or <code>to heic</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <h2>Core workflows</h2>
+
+      <h3>Workflow A - Ask a normal private question</h3>
+      <ol>
+        <li>Click <b>New chat</b>.</li>
+        <li>Leave Web, Agent, and Convert off.</li>
+        <li>Type your question.</li>
+        <li>Press Enter or click Send.</li>
+      </ol>
+      <p>
+        Use this for private brainstorming, summaries, drafting, translations,
+        and local notes. The model answers from its local knowledge.
+      </p>
+
+      <h3>Workflow B - Research with sources</h3>
+      <ol>
+        <li>Click <b>Web</b>.</li>
+        <li>Ask for sources, recent information, or references.</li>
+        <li>Privai searches through local SearXNG, filters results, and passes
+          a small number of relevant snippets to the model.</li>
+      </ol>
+      <p>
+        Web search is useful, but it is the least private mode because search
+        queries can be sent to upstream engines. Use it only when freshness or
+        citations matter.
+      </p>
+
+      <h3>Workflow C - Build a website or artifact</h3>
+      <ol>
+        <li>Click <b>Agent</b>.</li>
+        <li>Describe exactly what to build.</li>
+        <li>If you need sources, also click <b>Web</b> or ask for sources.</li>
+        <li>If you have a PDF or image, attach it before sending.</li>
+      </ol>
+      <p>
+        Agent mode uses a local instruction file that tells the model to return
+        a complete HTML artifact, include sources inside the page, and keep the
+        layout simple enough to finish.
+      </p>
+
+      <h3>Workflow D - Convert files locally</h3>
+      <ol>
+        <li>Attach a file.</li>
+        <li>Click <b>Convert</b>.</li>
+        <li>Type the target format, for example <code>to pdf</code> or
+          <code>to heic</code>.</li>
+        <li>Download the converted attachment from the assistant response.</li>
+      </ol>
+      <p>
+        This is safer than public converter websites for private documents,
+        contracts, invoices, personal photos, and school files.
+      </p>
+    </section>
+
+    <section class="page">
+      <h2>Privacy quick reference</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Where it goes</th>
+            <th>What to remember</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Login</td>
+            <td>Firebase Auth</td>
+            <td>Used for identity and signed ID tokens.</td>
+          </tr>
+          <tr>
+            <td>Device heartbeat</td>
+            <td>Firestore</td>
+            <td>Stores status metadata, not chat content.</td>
+          </tr>
+          <tr>
+            <td>Chats</td>
+            <td>Device SQLite</td>
+            <td>Conversation text stays on your device.</td>
+          </tr>
+          <tr>
+            <td>Attachments</td>
+            <td>Device attachment storage</td>
+            <td>Uploaded and converted files stay local.</td>
+          </tr>
+          <tr>
+            <td>Model inference</td>
+            <td>Ollama on device</td>
+            <td>Answers are generated locally.</td>
+          </tr>
+          <tr>
+            <td>Web search</td>
+            <td>SearXNG and upstream engines</td>
+            <td>Only use when current web context is needed.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout good">
+        The most important rule: if Web is off, normal chat, attachments,
+        conversion, and local model inference are designed to stay on your own
+        hardware.
+      </div>
+    </section>
+
+    <section class="page">
+      <h2>Troubleshooting</h2>
+
+      <h3>The app says the backend is unreachable</h3>
+      <p>
+        Open Settings and verify the Device URL. For local development it is
+        usually <code>http://127.0.0.1:8080</code>. Also make sure the FastAPI
+        backend is running.
+      </p>
+
+      <h3>The model is not listed</h3>
+      <p>
+        Install it on the device with Ollama, then refresh the Device page.
+        Example: <code>ollama pull qwen2.5:7b</code>.
+      </p>
+
+      <h3>Image questions do not work</h3>
+      <p>
+        Install a vision model and configure <code>OLLAMA_VISION_MODEL</code>.
+        Example: <code>ollama pull llava:7b</code>.
+      </p>
+
+      <h3>PowerPoint to PDF does not work</h3>
+      <p>
+        Install LibreOffice or <code>soffice</code> on the device. Image
+        conversion uses local image tools; Office conversion needs LibreOffice.
+      </p>
+
+      <h3>The agent builds weak websites</h3>
+      <p>
+        Use Agent mode and give a concrete request: topic, audience, style,
+        sections, and whether sources should be included. Keep Web sources
+        limited; too many snippets reduce the space available for HTML.
+      </p>
+
+      <h3>The context meter is full</h3>
+      <p>
+        Use <code>/compact</code> to summarize old turns into one recap, or
+        <code>/clear</code> to wipe the conversation.
+      </p>
+    </section>
+
+    <section class="page">
+      <h2>One-page summary for users</h2>
+      <div class="grid two">
+        <div class="card">
+          <strong>1. Connect</strong>
+          <p>Open Settings, set your Device URL, save, and pair the account.</p>
+        </div>
+        <div class="card">
+          <strong>2. Choose</strong>
+          <p>Open Device, pick the model, and start the LLM if needed.</p>
+        </div>
+        <div class="card">
+          <strong>3. Learn</strong>
+          <p>Read How it works to understand privacy, storage, search, and conversion.</p>
+        </div>
+        <div class="card">
+          <strong>4. Chat</strong>
+          <p>Use the composer: Web for sources, Agent for building, Convert for files, Attachments for context.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        Privai is useful because it brings chat, document context, image
+        understanding, local conversion, and artifact building into one private
+        device-owned workspace.
+      </div>
+
+      <p class="footer-note">
+        Prepared for the Privai prototype. Open this file in a browser and use
+        the browser print dialog to export a PDF booklet.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

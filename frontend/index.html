@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Local AI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Local AI</div>
+    <div class="status">
+      <span id="model" class="pill">model…</span>
+      <span id="searx" class="pill">search…</span>
+      <span id="ollama" class="pill">llm…</span>
+    </div>
+    <button id="clear" class="ghost" title="Clear local history">clear</button>
+  </header>
+
+  <main id="messages" class="messages" aria-live="polite"></main>
+
+  <footer class="composer">
+    <label class="search-toggle" title="Force web search for next message">
+      <input id="force-search" type="checkbox" />
+      <span>web</span>
+    </label>
+    <textarea
+      id="input"
+      placeholder="Ask anything — stays on this device unless you toggle web."
+      rows="1"
+      autofocus
+    ></textarea>
+    <button id="send">Send</button>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
