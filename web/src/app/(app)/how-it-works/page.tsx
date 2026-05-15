@@ -21,9 +21,9 @@ import { useEffect, useState } from "react";
 import { board, getBoardUrl } from "@/lib/board";
 
 export default function HowItWorksPage() {
-  const [model, setModel] = useState<string>("gpt-5.4-mini");
-  const [provider, setProvider] = useState<string>("openai");
-  const [numCtx, setNumCtx] = useState<number>(400000);
+  const [model, setModel] = useState<string>("gemini-3.1-pro-preview");
+  const [provider, setProvider] = useState<string>("gemini");
+  const [numCtx, setNumCtx] = useState<number>(1000000);
   const [version, setVersion] = useState<string>("");
 
   useEffect(() => {
@@ -40,11 +40,11 @@ export default function HowItWorksPage() {
 
   return (
     <>
-      <div className="px-4 md:px-6 py-3 border-b border-line bg-bg sticky top-0 z-10">
+      <div className="shrink-0 px-4 md:px-6 py-3 border-b border-line bg-bg sticky top-0 z-10">
         <div className="font-serif text-lg tracking-tight">How it works</div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-8">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 md:px-6 py-8">
         <div className="mx-auto max-w-3xl grid gap-10">
           <Hero />
 
@@ -63,9 +63,8 @@ export default function HowItWorksPage() {
               Your browser sends each message <em>directly</em> to the device,
               with a Firebase-signed token attached. The device verifies the
               token against Google&apos;s public keys and checks that you are the
-              paired owner. If the provider is OpenAI, the backend then sends
-              the prompt to OpenAI for generation; if the provider is Ollama,
-              generation stays local.
+              paired owner. The backend then sends the prompt to Gemini for
+              generation.
             </p>
 
             <PrivacyTable />
@@ -147,10 +146,8 @@ export default function HowItWorksPage() {
               .
             </p>
             <p>
-              The backend now speaks the OpenAI Responses API by default, with
-              the old Ollama path still available behind{" "}
-              <code className="bg-surface-2 px-1 rounded">LLM_PROVIDER=ollama</code>.
-              Chat rows, attachments, titles, sources, and redaction metadata
+              The backend uses the Gemini API. Chat rows,
+              attachments, titles, sources, and redaction metadata
               still stay in <code className="bg-surface-2 px-1 rounded">data/chat.db</code>.
             </p>
 
@@ -163,33 +160,28 @@ export default function HowItWorksPage() {
               <Bullet
                 icon={<Cpu className="h-4 w-4" />}
                 title="Remote model"
-                body="OpenAI handles generation, so the laptop or board no longer needs to keep a local model in RAM."
+                body="Gemini handles generation through the configured API key."
               />
               <Bullet
                 icon={<Activity className="h-4 w-4" />}
-                title="Reversible"
-                body="Set LLM_PROVIDER=ollama and OLLAMA_MODEL later to return to a local model setup."
+                title="API only"
+                body="Local model routing has been removed; model responses use the configured Gemini API key."
               />
             </div>
 
             <h3 className="font-medium mt-4">Swapping the model</h3>
             <ol className="list-decimal pl-5 space-y-2 marker:text-muted">
               <li>
-                Change the OpenAI model in the repo-root environment file:
-                <Code>OPENAI_MODEL=gpt-5.4-mini</Code>
+                Change the Gemini model in the repo-root environment file:
+                <Code>GEMINI_MODEL=gemini-3.1-pro-preview</Code>
               </li>
               <li>
                 Restart the backend:
                 <Code>bash scripts/run_all.sh</Code>
               </li>
-              <li>
-                For the local model path later, switch provider and set an
-                Ollama tag:
-                <Code>{`LLM_PROVIDER=ollama OLLAMA_MODEL=llama3.2:1b bash scripts/run_all.sh`}</Code>
-              </li>
             </ol>
             <Callout tone="warn" icon={<Eye className="h-4 w-4" />}>
-              With the OpenAI provider, prompt content leaves the device for
+              With the Gemini provider, prompt content leaves the device for
               generation. Stored chat history remains local unless you export or
               sync the database yourself.
             </Callout>
@@ -294,9 +286,7 @@ export default function HowItWorksPage() {
               <li>
                 <b>Models</b> → current provider is{" "}
                 <code className="bg-surface-2 px-1 rounded">{provider}</code>.
-                Ollama models are managed under{" "}
-                <code className="bg-surface-2 px-1 rounded">~/.ollama</code>{" "}
-                when the local provider is enabled.
+                Model generation uses the configured Gemini API key.
               </li>
               <li>
                 <b>Search cache</b> → in-memory inside SearXNG, not persisted.
@@ -478,7 +468,7 @@ function PrivacyTable() {
     { what: "Chat messages, sources, redactions", where: "Device SQLite", sees: "Only the device", tone: "good" },
     { what: "Uploaded and converted files", where: "Device attachment storage", sees: "Only the device", tone: "good" },
     { what: "Search queries (when web on)", where: "Device → upstream engines", sees: "Engines see the query", tone: "warn" },
-    { what: "Model inferences", where: "OpenAI or device Ollama", sees: "Provider sees prompt when OpenAI is active", tone: "warn" },
+    { what: "Model inferences", where: "Gemini", sees: "Gemini sees the prompt sent for generation", tone: "warn" },
   ];
   return (
     <div className="not-prose overflow-hidden border border-line rounded-[12px]">
@@ -547,7 +537,7 @@ function Flow() {
     {
       icon: <Sparkles className="h-4 w-4" />,
       title: "7. The configured LLM generates the answer",
-      body: "OpenAI is the default provider now; Ollama can still be enabled for local generation. Tokens stream back over Server-Sent Events.",
+      body: "Gemini generates the answer. Tokens stream back over Server-Sent Events.",
     },
     {
       icon: <Database className="h-4 w-4" />,

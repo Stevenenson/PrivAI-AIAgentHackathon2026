@@ -14,7 +14,6 @@ interface Installed {
 
 export function ModelPicker({ onChanged }: { onChanged?: () => void }) {
   const [installed, setInstalled] = useState<Installed[]>([]);
-  const [provider, setProvider] = useState<string>("");
   const [active, setActive] = useState<string>("");
   const [picked, setPicked] = useState<string>("");
   const [busy, setBusy] = useState<"refresh" | "set" | null>(null);
@@ -26,7 +25,6 @@ export function ModelPicker({ onChanged }: { onChanged?: () => void }) {
     setErr(null);
     try {
       const r = await board.llmModels();
-      setProvider(r.provider);
       setInstalled(r.installed);
       setActive(r.active);
       setPicked(r.active);
@@ -74,7 +72,7 @@ export function ModelPicker({ onChanged }: { onChanged?: () => void }) {
           )}
         >
           {installed.length === 0 ? (
-            <option value="">no models configured</option>
+            <option value="">no AI models configured</option>
           ) : (
             installed.map((m) => (
               <option key={m.name} value={m.name}>
@@ -115,25 +113,9 @@ export function ModelPicker({ onChanged }: { onChanged?: () => void }) {
       ) : null}
 
       <p className="text-xs text-muted">
-        {provider === "openai" ? (
-          <>
-            Need a different one? Add it to{" "}
-            <code className="bg-surface-2 px-1 py-0.5 rounded">
-              OPENAI_MODELS
-            </code>{" "}
-            or type a model through the API. The default is the configured
-            OpenAI model.
-          </>
-        ) : (
-          <>
-            Need a different one? On your device run{" "}
-            <code className="bg-surface-2 px-1 py-0.5 rounded">
-              ollama pull qwen2.5:7b
-            </code>{" "}
-            (or any tag) and click Refresh. Bigger models give better artifacts
-            but eat more RAM and run slower on RISC-V.
-          </>
-        )}
+        Need another Gemini model? Add it to{" "}
+        <code className="bg-surface-2 px-1 py-0.5 rounded">GEMINI_MODELS</code>{" "}
+        in the local settings file. The default is the configured Gemini model.
       </p>
     </div>
   );

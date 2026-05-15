@@ -1,5 +1,5 @@
 "use client";
-import { Pause, Play, RefreshCw } from "lucide-react";
+import { Play, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -57,7 +57,6 @@ export function StartStopLLM({
   }
 
   const loaded = !!status?.loaded;
-  const remote = status?.provider === "openai";
 
   return (
     <div className="grid gap-3">
@@ -66,17 +65,8 @@ export function StartStopLLM({
           variant={loaded ? "secondary" : "primary"}
           onClick={() => trigger("start")}
           loading={busy === "start"}
-          disabled={loaded && !remote}
         >
-          <Play className="h-4 w-4" /> {remote ? "Check LLM" : "Start LLM"}
-        </Button>
-        <Button
-          variant={loaded ? "primary" : "secondary"}
-          onClick={() => trigger("stop")}
-          loading={busy === "stop"}
-          disabled={!loaded || remote}
-        >
-          <Pause className="h-4 w-4" /> Stop LLM
+          <Play className="h-4 w-4" /> Check Gemini
         </Button>
         <Button variant="ghost" onClick={refresh} loading={busy === "status"}>
           <RefreshCw className="h-4 w-4" /> Refresh
@@ -89,23 +79,13 @@ export function StartStopLLM({
       ) : null}
       {status ? (
         <div className="text-xs text-muted">
-          {remote ? (
-            <span>
-              <span className={loaded ? "text-good" : "text-bad"}>
-                {loaded ? "●" : "○"}
-              </span>{" "}
-              OpenAI remote provider · <code className="font-mono">{status.model}</code>
-            </span>
-          ) : loaded ? (
-            <span>
-              <span className="text-good">●</span> {status.model} loaded · using{" "}
-              {status.running[0]?.size ?? "—"} RAM
-            </span>
-          ) : (
-            <span>
-              <span className="text-warn">○</span> No model resident in RAM
-            </span>
-          )}
+          <span>
+            <span className={loaded ? "text-good" : "text-bad"}>
+              {loaded ? "●" : "○"}
+            </span>{" "}
+            {loaded ? "Gemini API ready" : "Gemini API key is not configured"} ·{" "}
+            <code className="font-mono">{status.model}</code>
+          </span>
         </div>
       ) : null}
     </div>

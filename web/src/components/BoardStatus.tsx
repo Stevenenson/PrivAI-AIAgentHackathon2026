@@ -21,7 +21,7 @@ export function BoardStatusPill({ uid }: { uid: string }) {
   const lastSeenMs = toMillis(s?.lastSeen);
   const stale = !lastSeenMs || now - lastSeenMs > STALE_MS;
   const online = !!s?.online && !stale;
-  const llmReady = s?.llm ?? s?.llmLoaded ?? s?.ollama;
+  const llmReady = s?.llm ?? s?.llmLoaded;
 
   let label: string;
   let tone: "good" | "bad" | "warn";

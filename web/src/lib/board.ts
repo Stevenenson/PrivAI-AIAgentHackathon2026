@@ -5,9 +5,34 @@ import type {
   AttachmentMeta,
   ChatMessage,
   ChatMode,
+  ChatSpace,
   ChatSession,
+  AgentToolEvent,
+  BusinessAction,
+  BusinessEmailMessage,
+  BusinessSettings,
+  CalendarSlot,
+  GoogleWorkspaceStatus,
+  LearningMaterial,
+  LearningPracticeSet,
+  PreviewInfo,
+  PrivacyMode,
   SearchSource,
+  WorkspaceFile,
+  WorkspaceCheckpoint,
+  WorkspaceSearchMatch,
+  WorkspaceTerminalResult,
+  WorkspaceTree,
 } from "./types";
+
+interface ExperienceRequest {
+  persona?: string;
+  primaryGoal?: string;
+  detailLevel?: string;
+  businessContext?: string;
+  privacyMode?: string;
+  autoApproveReadOnlyCommands?: boolean;
+}
 
 const DEFAULT_BOARD_URL =
   process.env.NEXT_PUBLIC_DEFAULT_BOARD_URL ?? "http://127.0.0.1:8080";
@@ -101,8 +126,8 @@ export const board = {
     api<{
       llm: boolean;
       provider: string;
-      ollama: boolean;
       searxng: boolean;
+      searchFallback: boolean;
       model: string;
       default: string;
       paired: boolean;
@@ -114,6 +139,7 @@ export const board = {
       terminalEnabled: boolean;
       workspaceRoot: string;
       agentMaxToolSteps: number;
+      commandApprovalRequired: boolean;
     }>("/health", { auth: false }),
 
   pairStatus: () =>
@@ -130,8 +156,8 @@ export const board = {
   listSessions: () =>
     api<{ sessions: ChatSession[] }>("/sessions").then((r) => r.sessions),
 
-  createSession: (title?: string) =>
-    api<ChatSession>("/sessions", { method: "POST", body: { title } }),
+  createSession: (title?: string, space?: ChatSpace) =>
+    api<ChatSession>("/sessions", { method: "POST", body: { title, space } }),
 
   renameSession: (sid: string, title: string) =>
     api<{ ok: boolean }>(`/sessions/${sid}`, {
@@ -169,6 +195,11 @@ export const board = {
       mode?: ChatMode;
       attachmentIds?: string[];
       searchTopK?: number;
+      experience?: ExperienceRequest;
+      commandApprovalRequired?: boolean;
+      autoApproveReadOnlyCommands?: boolean;
+      privacyMode?: PrivacyMode;
+      space?: ChatSpace;
     } = {},
   ) =>
     api<{
@@ -184,6 +215,11 @@ export const board = {
         mode: opts.mode ?? "chat",
         attachmentIds: opts.attachmentIds ?? null,
         searchTopK: opts.searchTopK ?? null,
+        experience: opts.experience ?? null,
+        commandApprovalRequired: opts.commandApprovalRequired ?? null,
+        autoApproveReadOnlyCommands: opts.autoApproveReadOnlyCommands ?? null,
+        privacyMode: opts.privacyMode ?? opts.experience?.privacyMode ?? null,
+        space: opts.space ?? null,
       },
     }),
 
@@ -257,6 +293,197 @@ export const board = {
 
   llmStop: () =>
     api<{ ok: boolean; model: string }>("/admin/llm/stop", { method: "POST" }),
+
+  startPreview: (cwd: string) =>
+    api<PreviewInfo>("/agent/preview", {
+      method: "POST",
+      body: { cwd },
+    }),
+
+  stopPreview: () =>
+    api<{ ok: boolean }>("/agent/preview/stop", { method: "POST" }),
+
+  previewStatus: () => api<PreviewInfo>("/agent/preview"),
+
+  businessSettings: () => api<BusinessSettings>("/business/settings"),
+
+  saveBusinessSettings: (patch: Partial<BusinessSettings>) =>
+    api<BusinessSettings>("/business/settings", {
+      method: "POST",
+      body: patch,
+    }),
+
+  searchWeb: (q: string, topK = 10) =>
+    api<{ results: SearchSource[] }>("/search", {
+      method: "POST",
+      body: { q, top_k: topK },
+    }).then((r) => r.results),
+
+  googleStatus: () => api<GoogleWorkspaceStatus>("/google/status"),
+
+  googleAuthUrl: () => api<{ url: string }>("/google/auth-url"),
+
+  googleDisconnect: () =>
+    api<GoogleWorkspaceStatus>("/google/disconnect", { method: "POST" }),
+
+  businessEmailSearch: (q: string, limit = 10) =>
+    api<{ query: string; messages: BusinessEmailMessage[] }>(
+      `/business/email/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+
+  businessEmailThread: (threadId: string) =>
+    api<{ threadId: string; messages: BusinessEmailMessage[] }>(
+      `/business/email/thread/${encodeURIComponent(threadId)}`,
+    ),
+
+  businessCalendarSlots: (payload: {
+    timeMin: string;
+    timeMax: string;
+    durationMinutes?: number;
+    calendarId?: string;
+  }) =>
+    api<{
+      calendarId: string;
+      timeMin: string;
+      timeMax: string;
+      durationMinutes: number;
+      busy: Array<{ start: string; end: string }>;
+      slots: CalendarSlot[];
+    }>("/business/calendar/slots", {
+      method: "POST",
+      body: payload,
+    }),
+
+  draftBusinessCalendarEvent: (payload: {
+    summary: string;
+    description?: string;
+    start: string;
+    end: string;
+    timezone?: string;
+    attendees?: string[];
+    calendarId?: string;
+  }) =>
+    api<{ status: string; action: BusinessAction; message: string }>(
+      "/business/calendar/events/draft",
+      {
+        method: "POST",
+        body: payload,
+      },
+    ),
+
+  businessActions: (status?: string) =>
+    api<{ actions: BusinessAction[] }>(
+      `/business/actions${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+    ).then((r) => r.actions),
+
+  approveBusinessAction: (actionId: string) =>
+    api<BusinessAction>(`/business/actions/${actionId}/approve`, {
+      method: "POST",
+    }),
+
+  rejectBusinessAction: (actionId: string) =>
+    api<BusinessAction>(`/business/actions/${actionId}/reject`, {
+      method: "POST",
+    }),
+
+  learningMaterials: (sid: string) =>
+    api<{ materials: LearningMaterial[]; studied: number; total: number }>(
+      `/learning/${sid}/materials`,
+    ),
+
+  addLearningTextMaterial: (
+    sid: string,
+    payload: { title?: string; content: string },
+  ) =>
+    api<LearningMaterial>(`/learning/${sid}/materials/text`, {
+      method: "POST",
+      body: payload,
+    }),
+
+  addLearningAttachmentMaterial: (sid: string, attachmentId: string) =>
+    api<LearningMaterial>(`/learning/${sid}/materials/attachment`, {
+      method: "POST",
+      body: { attachmentId },
+    }),
+
+  deleteLearningMaterial: (sid: string, mid: string) =>
+    api<{ ok: boolean }>(`/learning/${sid}/materials/${mid}`, {
+      method: "DELETE",
+    }),
+
+  generateLearningPractice: (
+    sid: string,
+    payload: { kind: "quiz" | "test"; count?: number },
+  ) =>
+    api<LearningPracticeSet>(`/learning/${sid}/practice`, {
+      method: "POST",
+      body: payload,
+    }),
+
+  decideCommandApproval: (approvalId: string, approved: boolean) =>
+    api<{ ok: boolean; approved: boolean }>(`/agent/approvals/${approvalId}`, {
+      method: "POST",
+      body: { approved },
+    }),
+
+  approveCommand: (approvalId: string) =>
+    api<{ ok: boolean; approved: true }>(
+      `/agent/approvals/${approvalId}/approve`,
+      { method: "POST" },
+    ),
+
+  rejectCommand: (approvalId: string) =>
+    api<{ ok: boolean; approved: false }>(
+      `/agent/approvals/${approvalId}/reject`,
+      { method: "POST" },
+    ),
+
+  workspaceTree: (path = ".") =>
+    api<WorkspaceTree>(`/workspace/tree?path=${encodeURIComponent(path)}`),
+
+  workspaceFile: (path: string) =>
+    api<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
+
+  workspaceSearch: (q: string, limit = 50) =>
+    api<{ query: string; matches: WorkspaceSearchMatch[] }>(
+      `/workspace/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+
+  workspaceCheckpoints: () =>
+    api<{ checkpoints: WorkspaceCheckpoint[] }>("/workspace/checkpoints").then(
+      (r) => r.checkpoints,
+    ),
+
+  createWorkspaceCheckpoint: (title?: string) =>
+    api<WorkspaceCheckpoint>("/workspace/checkpoints", {
+      method: "POST",
+      body: { title: title ?? null },
+    }),
+
+  restoreWorkspaceCheckpoint: (checkpointId: string) =>
+    api<{ ok: boolean; restored: number }>(
+      `/workspace/checkpoints/${checkpointId}/restore`,
+      { method: "POST" },
+    ),
+
+  saveWorkspaceFile: (path: string, content: string) =>
+    api<{ ok: boolean; path: string; size: number; modified: number }>(
+      "/workspace/file",
+      {
+        method: "POST",
+        body: { path, content },
+      },
+    ),
+
+  runWorkspaceCommand: (
+    command: string,
+    cwd = ".",
+    timeoutS = 60,
+  ) =>
+    api<WorkspaceTerminalResult>("/workspace/terminal", {
+      method: "POST",
+      body: { command, cwd, timeoutS },
+    }),
 };
 
 // ---- streaming chat (SSE)
@@ -269,8 +496,12 @@ export interface StreamHandlers {
     sources: SearchSource[];
     redactions: string[];
     mode?: ChatMode;
+    provider?: string;
+    routeReason?: string;
+    routedSensitive?: boolean;
   }) => void;
   onDelta?: (delta: string) => void;
+  onTool?: (event: AgentToolEvent) => void;
   onDone?: (assistant: ChatMessage, artifact: Artifact | null) => void;
   onError?: (err: string) => void;
 }
@@ -280,6 +511,11 @@ export interface StreamOpts {
   mode?: ChatMode;
   attachmentIds?: string[];
   searchTopK?: number;
+  experience?: ExperienceRequest;
+  commandApprovalRequired?: boolean;
+  autoApproveReadOnlyCommands?: boolean;
+  privacyMode?: PrivacyMode;
+  space?: ChatSpace;
 }
 
 export async function streamChat(
@@ -304,6 +540,11 @@ export async function streamChat(
       mode: opts.mode ?? "chat",
       attachmentIds: opts.attachmentIds ?? null,
       searchTopK: opts.searchTopK ?? null,
+      experience: opts.experience ?? null,
+      commandApprovalRequired: opts.commandApprovalRequired ?? null,
+      autoApproveReadOnlyCommands: opts.autoApproveReadOnlyCommands ?? null,
+      privacyMode: opts.privacyMode ?? opts.experience?.privacyMode ?? null,
+      space: opts.space ?? null,
     }),
     signal,
   });
@@ -327,6 +568,7 @@ export async function streamChat(
         const obj = JSON.parse(line.slice(6));
         if (obj.type === "meta") handlers.onMeta?.(obj);
         else if (obj.type === "delta") handlers.onDelta?.(obj.delta);
+        else if (obj.type === "tool") handlers.onTool?.(obj);
         else if (obj.type === "done")
           handlers.onDone?.(obj.assistant, obj.artifact ?? null);
         else if (obj.type === "error") handlers.onError?.(obj.error);

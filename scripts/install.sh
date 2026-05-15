@@ -25,7 +25,7 @@ mkdir -p data/cache data/logs
 if [ ! -f ".env" ]; then
   cp .env.example .env
   chmod 600 .env
-  echo "created .env from .env.example; set OPENAI_API_KEY before running"
+  echo "created .env from .env.example; set GEMINI_API_KEY before running"
 fi
 
 echo "install ok. next: bash scripts/run_all.sh"

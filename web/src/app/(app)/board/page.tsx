@@ -30,6 +30,7 @@ export default function BoardPage() {
   const [llmRefreshKey, setLlmRefreshKey] = useState(0);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [agentMaxToolSteps, setAgentMaxToolSteps] = useState(20);
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof board.health>> | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -39,6 +40,7 @@ export default function BoardPage() {
   useEffect(() => {
     board.health()
       .then((h) => {
+        setHealth(h);
         setWorkspaceRoot(h.workspaceRoot || "");
         setAgentMaxToolSteps(h.agentMaxToolSteps || 20);
       })
@@ -51,26 +53,26 @@ export default function BoardPage() {
 
   return (
     <>
-      <div className="px-4 md:px-6 py-3 border-b border-line bg-bg sticky top-0 z-10">
+      <div className="shrink-0 px-4 md:px-6 py-3 border-b border-line bg-bg sticky top-0 z-10">
         <div className="font-serif text-lg tracking-tight">Device</div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-8">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 md:px-6 py-8">
         <div className="mx-auto max-w-3xl grid gap-6">
           <header>
             <h1 className="font-serif text-3xl tracking-tight mb-1">
               Your device
             </h1>
             <p className="text-muted">
-              See the active model provider, what&apos;s configured, and search
-              health.
+              See the active AI model, work folder, search, and automation
+              status.
             </p>
           </header>
 
           <section className="bg-surface border border-line rounded-[14px] p-5 grid gap-4">
             <h2 className="font-medium flex items-center gap-2">
               <Activity className="h-4 w-4 text-accent" />
-              LLM lifecycle
+              AI connection
             </h2>
             <StartStopLLM key={llmRefreshKey} onChange={setLlm} />
           </section>
@@ -78,7 +80,7 @@ export default function BoardPage() {
           <section className="bg-surface border border-line rounded-[14px] p-5 grid gap-4">
             <h2 className="font-medium flex items-center gap-2">
               <Cpu className="h-4 w-4 text-accent" />
-              Model
+              AI model
             </h2>
             <ModelPicker onChanged={() => setLlmRefreshKey((v) => v + 1)} />
           </section>
@@ -91,20 +93,26 @@ export default function BoardPage() {
             />
             <Card
               icon={<HardDrive className="h-4 w-4 text-accent" />}
-              label="Provider"
+              label="AI route"
               value={llm?.provider || s?.provider || "—"}
             />
             <Card
               icon={<Server className="h-4 w-4 text-accent" />}
-              label="LLM"
-              value={s?.llm || s?.ollama ? "configured" : "unconfigured"}
-              tone={s?.llm || s?.ollama ? "good" : "bad"}
+              label="AI"
+              value={health?.llm ? "configured" : "unconfigured"}
+              tone={health?.llm ? "good" : "bad"}
             />
             <Card
               icon={<Search className="h-4 w-4 text-accent" />}
-              label="SearXNG"
-              value={s?.searxng ? "reachable" : "unreachable"}
-              tone={s?.searxng ? "good" : "bad"}
+              label="Web search"
+              value={
+                health?.searxng
+                  ? "ready"
+                  : health?.searchFallback
+                    ? "fallback ready"
+                    : "unreachable"
+              }
+              tone={health?.searxng || health?.searchFallback ? "good" : "bad"}
             />
             <Card
               icon={<Network className="h-4 w-4 text-accent" />}
@@ -118,14 +126,14 @@ export default function BoardPage() {
             />
             <Card
               icon={<FolderOpen className="h-4 w-4 text-accent" />}
-              label="Workspace"
+              label="Work folder"
               value={formatWorkspace(workspaceRoot)}
               title={workspaceRoot || "Workspace unknown"}
             />
             <Card
               icon={<Server className="h-4 w-4 text-accent" />}
-              label="Agent terminal"
-              value={`max ${agentMaxToolSteps} steps`}
+              label="Automation"
+              value={`max ${agentMaxToolSteps} actions`}
             />
           </section>
 

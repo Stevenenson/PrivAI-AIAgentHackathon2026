@@ -157,7 +157,7 @@ export default function LoginPage() {
       </main>
 
       <footer className="text-xs text-muted text-center pb-8">
-        Local AI · RISC-V licenta prototype
+        Gemini workspace · desktop automation
       </footer>
     </div>
   );

@@ -2,12 +2,17 @@ import type { Metadata, Viewport } from "next";
 
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth";
+import { ExperienceProvider } from "@/lib/experience";
 import { ThemeProvider, themeBootstrapScript } from "@/lib/theme";
 
 export const metadata: Metadata = {
   title: "Privai",
-  description:
-    "Privacy-first local AI. Conversations stay on your hardware.",
+  description: "Gemini-powered workspace for business, coding, and learning.",
+  icons: {
+    icon: "/privai-mark.svg",
+    shortcut: "/privai-mark.svg",
+    apple: "/privai-mark.svg",
+  },
 };
 
 export const viewport: Viewport = {
@@ -37,7 +42,9 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col bg-bg text-ink">
         <ThemeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <ExperienceProvider>{children}</ExperienceProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

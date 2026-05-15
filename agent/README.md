@@ -2,10 +2,10 @@
 
 Long-running Node service that lives on the same machine as the FastAPI
 backend. It is the bridge between Firestore (where the web app puts commands)
-and the local FastAPI orchestrator (which runs Ollama + SearXNG).
+and the local FastAPI orchestrator (which talks to Gemini and SearXNG).
 
 ```
-[Web app] -> Firestore.commands -> [agent] -> FastAPI :8080 -> {Ollama, SearXNG}
+[Web app] -> Firestore.commands -> [agent] -> FastAPI :8080 -> {Gemini, SearXNG}
                                        \--> Firestore.{messages, board}
 ```
 
@@ -35,7 +35,7 @@ npm run dev                # tsx watch
   against the FastAPI backend, writes the result back, marks it `done` or
   `error`.
 - Heartbeats `users/{uid}/board/status` every `HEARTBEAT_MS` with the live
-  health of Ollama, SearXNG, and which model is currently loaded into RAM.
+  health of Gemini, SearXNG, and the active model name.
 
 Works the same on the laptop prototype and on the RISC-V board (Node 20+ runs
 fine on Debian/Ubuntu RISC-V images).

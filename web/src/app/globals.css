@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
 
 /* =====================================================================
    Theme tokens — dark by default; [data-theme="light"] swaps to white.

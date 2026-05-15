@@ -12,46 +12,37 @@ from .config import settings
 
 
 def get_provider() -> str:
-    return settings.llm_provider
+    return "gemini"
 
 
 def default_model(provider: str | None = None) -> str:
-    active_provider = provider or settings.llm_provider
-    if active_provider == "ollama":
-        return settings.ollama_model
-    return settings.openai_model
+    return settings.gemini_model
 
 
-def get_model() -> str:
-    saved = database.get_kv("llm_model")
-    if saved:
-        return saved
-    if settings.llm_provider == "ollama":
-        return database.get_kv("ollama_model") or settings.ollama_model
-    return settings.openai_model
+def get_model(provider: str | None = None) -> str:
+    return (
+        database.get_kv("gemini_model")
+        or database.get_kv("llm_model")
+        or settings.gemini_model
+    )
 
 
-def set_model(model: str) -> None:
+def set_model(model: str, provider: str | None = None) -> None:
+    database.set_kv("gemini_model", model.strip())
     database.set_kv("llm_model", model.strip())
 
 
-def get_vision_model() -> str:
-    if settings.llm_provider == "ollama":
-        return settings.ollama_vision_model
-    return settings.openai_vision_model or get_model()
+def get_vision_model(provider: str | None = None) -> str:
+    return settings.gemini_vision_model or get_model("gemini")
 
 
 def context_window() -> int:
-    if settings.llm_provider == "openai":
-        return settings.openai_context_window
-    return settings.llm_num_ctx
+    return settings.gemini_context_window
 
 
 def available_models() -> tuple[str, ...]:
-    if settings.llm_provider == "openai":
-        current = get_model()
-        values = list(settings.openai_models)
-        if current not in values:
-            values.insert(0, current)
-        return tuple(values)
-    return ()
+    current = get_model()
+    values = list(settings.gemini_models)
+    if current not in values:
+        values.insert(0, current)
+    return tuple(values)

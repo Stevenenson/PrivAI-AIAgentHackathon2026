@@ -1,0 +1,427 @@
+\documentclass[a4paper,11pt,twoside]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+
+\definecolor{privaiblue}{HTML}{1a2332}
+\definecolor{privaigold}{HTML}{c8a85c}
+\definecolor{codebg}{HTML}{f5f5f0}
+\definecolor{linkblue}{HTML}{2563eb}
+
+\hypersetup{colorlinks=true,linkcolor=privaiblue,urlcolor=linkblue,citecolor=privaiblue}
+
+\lstset{
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!40},
+  xleftmargin=1em,
+  framexleftmargin=0.5em,
+  columns=fullflexible
+}
+
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{infobox}[1][]{colback=blue!5,colframe=privaiblue,fonttitle=\bfseries,title=#1,breakable}
+\newtcolorbox{warnbox}[1][]{colback=yellow!8,colframe=privaigold,fonttitle=\bfseries,title=#1,breakable}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[LO]{\nouppercase{\rightmark}}
+\fancyhead[RE]{Privai User Guide}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\chapter}[display]{\normalfont\huge\bfseries\color{privaiblue}}{Chapter \thechapter}{12pt}{\Huge}
+
+\title{
+  \vspace{2cm}
+  {\Huge\bfseries\color{privaiblue} Privai}\\[0.5cm]
+  {\Large Privacy-First AI Desktop Workspace}\\[1cm]
+  {\large User Guide \& Technical Documentation}\\[2cm]
+  {\normalsize Version 0.2.0}
+}
+\author{Privai Project Documentation}
+\date{May 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+%========================================================================
+\chapter{Introduction}
+%========================================================================
+
+\section{What Is Privai?}
+Privai is a \textbf{privacy-first AI desktop workspace} for business automation, document management, and application building. It runs as a native macOS desktop application (Electron) with a local FastAPI backend that communicates with the OpenAI API for language model responses.
+
+The core privacy principle: \textbf{all chat history stays on your device} in a local SQLite database. Firebase is used \emph{only} for user identity (sign-in and ID tokens). No conversation content is stored in the cloud.
+
+\section{Key Features}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Chat with AI} --- conversational assistant powered by OpenAI models (GPT-5.4-mini default)
+  \item \textbf{Web Search} --- integrated SearXNG meta-search with automatic source citation
+  \item \textbf{Privacy Guard} --- regex-based redaction of sensitive data (CNP, phone, email, API keys) before it leaves the device
+  \item \textbf{Agent Mode} --- terminal-based code agent that can inspect, create, and edit files in a workspace
+  \item \textbf{File Conversion} --- local image/document conversion (HEIC, PDF, etc.)
+  \item \textbf{PDF Generation} --- create polished PDF documents from natural language
+  \item \textbf{Learning Notebooks} --- upload study materials and quiz yourself
+  \item \textbf{Google Workspace} --- read-only Gmail search and Google Calendar integration
+  \item \textbf{Workspaces} --- four specialized spaces: General, Business, Coding, and Learning
+  \item \textbf{Streaming Responses} --- real-time SSE token streaming
+  \item \textbf{Artifact Rendering} --- agent-generated HTML rendered in a sandboxed preview
+\end{itemize}
+
+\section{Architecture Overview}
+The system consists of three components:
+
+\begin{enumerate}
+  \item \textbf{FastAPI Backend} (Python, port 8080) --- orchestrator, LLM client, search, privacy guard, SQLite, terminal tools
+  \item \textbf{Web App} (Next.js 16, port 3000/3100) --- polished chat UI with Firebase Auth
+  \item \textbf{Agent Service} (Node.js) --- Firestore heartbeat writer for device online/offline status
+\end{enumerate}
+
+\begin{infobox}[Privacy Posture]
+Chat messages, sources, and redactions live \textbf{only} in local SQLite (\texttt{data/chat.db}). Firebase stores only authentication credentials and one heartbeat document per device. The OpenAI API sees prompt content for generation, but nothing is persisted on their side (\texttt{store: false}).
+\end{infobox}
+
+%========================================================================
+\chapter{Installation \& Setup}
+%========================================================================
+
+\section{Prerequisites}
+\begin{itemize}
+  \item macOS (Apple Silicon supported), Python 3.11+, Node.js 20+, Git
+  \item An OpenAI API key
+\end{itemize}
+
+\section{Quick Install}
+\begin{lstlisting}[language=bash]
+# Clone the repository, then:
+bash scripts/install.sh
+\end{lstlisting}
+This creates \texttt{.venv/}, installs FastAPI dependencies, clones SearXNG, and installs its requirements. It also creates \texttt{data/} directories and copies \texttt{.env.example} to \texttt{.env}.
+
+\section{Configuration}
+Edit the \texttt{.env} file in the project root:
+\begin{lstlisting}
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-5.4-mini
+OPENAI_VISION_MODEL=gpt-5.4-mini
+\end{lstlisting}
+
+\subsection{All Environment Variables}
+\begin{center}\small
+\begin{tabular}{@{}llp{5.5cm}@{}}
+\toprule
+\textbf{Variable} & \textbf{Default} & \textbf{Purpose} \\
+\midrule
+\texttt{OPENAI\_API\_KEY} & --- & OpenAI API key \\
+\texttt{OPENAI\_MODEL} & \texttt{gpt-5.4-mini} & Default text model \\
+\texttt{OPENAI\_VISION\_MODEL} & \texttt{gpt-5.4-mini} & Model for image attachments \\
+\texttt{OPENAI\_REASONING\_EFFORT} & \texttt{low} & Reasoning effort for reasoning models \\
+\texttt{SEARXNG\_URL} & \texttt{http://127.0.0.1:8888} & SearXNG base URL \\
+\texttt{API\_HOST} & \texttt{0.0.0.0} & Bind address \\
+\texttt{API\_PORT} & \texttt{8080} & Bind port \\
+\texttt{SEARCH\_TOP\_K} & \texttt{50} & Search results passed to LLM \\
+\texttt{SEARCH\_FALLBACK\_ENABLED} & \texttt{true} & DuckDuckGo fallback when SearXNG is offline \\
+\texttt{TERMINAL\_ENABLED} & \texttt{true} & Enable agent terminal tools \\
+\texttt{TERMINAL\_TIMEOUT\_S} & \texttt{60} & Command timeout in seconds \\
+\texttt{TERMINAL\_ALLOW\_DANGEROUS} & \texttt{false} & Bypass destructive command denylist \\
+\texttt{AGENT\_MAX\_TOOL\_STEPS} & \texttt{20} & Max tool loop steps per agent reply \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Running the Full Stack}
+Three processes are needed:
+
+\begin{lstlisting}[language=bash]
+# 1) Backend + SearXNG (prints PAIRING CODE on first boot)
+bash scripts/run_all.sh
+
+# 2) Agent heartbeat service
+cd agent && cp .env.example .env
+npm install && npm run dev
+
+# 3) Web app
+cd web && cp .env.local.example .env.local
+npm install && npm run dev    # http://localhost:3000
+\end{lstlisting}
+
+\section{Desktop Application}
+The Electron shell is in \texttt{web/electron/}. It auto-starts the FastAPI backend and the Next.js UI.
+
+\begin{lstlisting}[language=bash]
+# Run from source:
+cd web && npm run desktop:dev
+
+# Build distributable:
+cd web && npm run dist
+\end{lstlisting}
+
+Installed desktop builds read API keys from:\\
+\texttt{\textasciitilde/Library/Application Support/Privai/.env}
+
+%========================================================================
+\chapter{Device Pairing}
+%========================================================================
+
+\section{How Pairing Works}
+On first boot (when no owner is set), the backend prints a 6-digit pairing code to the console:
+
+\begin{lstlisting}
++----------------------------------------------+
+|  PAIRING CODE: 482919                        |
+|  Enter this in the web app /settings page.   |
++----------------------------------------------+
+\end{lstlisting}
+
+\section{Pairing Steps}
+\begin{enumerate}
+  \item Start the backend with \texttt{bash scripts/run\_all.sh}
+  \item Open \texttt{http://localhost:3000} and sign in (Email, Google, or GitHub)
+  \item Go to \textbf{Settings}
+  \item Enter the 6-digit code and click \emph{Pair device}
+  \item The device is now bound to your Firebase UID
+\end{enumerate}
+
+\begin{infobox}[Re-pairing]
+To pair a different account: delete \texttt{data/chat.db}, restart the backend, and repeat the pairing flow.
+\end{infobox}
+
+%========================================================================
+\chapter{Using Privai}
+%========================================================================
+
+\section{Workspaces (Spaces)}
+Privai organizes conversations into four spaces:
+
+\begin{description}[leftmargin=2em]
+  \item[General] Default space for everyday questions and tasks.
+  \item[Business] Business automation, email search, calendar management, client workflows.
+  \item[Coding] Software development with agent terminal tools, file editing, and app building.
+  \item[Learning] Study notebooks with material upload, quizzing, and key-term extraction.
+\end{description}
+
+\section{Chat Mode}
+The default mode. Type a question and receive an AI-generated answer. Features:
+\begin{itemize}
+  \item \textbf{Automatic web search}: triggered by keywords like ``search'', ``latest'', ``news'', ``price'', URLs, etc.
+  \item \textbf{Manual web toggle}: force search on/off per message.
+  \item \textbf{Source citations}: search results are numbered \texttt{[1]}, \texttt{[2]}, etc.\ in the response.
+  \item \textbf{Streaming}: responses arrive token-by-token via SSE.
+  \item \textbf{Image attachments}: upload images for vision model analysis.
+  \item \textbf{File attachments}: text files are embedded as context in the prompt.
+\end{itemize}
+
+\section{Agent Mode}
+Press the \textbf{Agent} toggle to enter agent mode. The AI can:
+\begin{itemize}
+  \item Run shell commands in the selected workspace
+  \item Create and edit project files
+  \item Install dependencies and run builds
+  \item Verify results with lint, tests, or build checks
+\end{itemize}
+
+\begin{warnbox}[Command Approval]
+By default, each terminal command requires your approval before execution. Read-only commands (ls, cat, grep, etc.) can be auto-approved. Dangerous commands (sudo, rm -rf /, etc.) are blocked unless \texttt{TERMINAL\_ALLOW\_DANGEROUS=true}.
+\end{warnbox}
+
+\noindent Example prompts for agent mode:
+\begin{lstlisting}
+Inspect this repo and tell me how to run the tests.
+Create a new Vite React app called todo-demo.
+Search the backend for streaming code and explain the flow.
+\end{lstlisting}
+
+Use \textbf{File > Open Workspace...} in the desktop app to choose where the agent operates.
+
+\section{Convert Mode}
+Attach files and ask Privai to convert them. Supported conversions:
+\begin{itemize}
+  \item \textbf{Image formats}: PNG, JPEG, HEIC, WebP, TIFF, BMP, GIF, ICO (via macOS \texttt{sips})
+  \item \textbf{Office to PDF}: DOCX, PPTX, XLSX, ODT, etc.\ (via LibreOffice \texttt{soffice})
+  \item \textbf{AI-generated PDFs}: ask ``create a PDF about X'' and the LLM generates the content
+\end{itemize}
+
+\section{Learning Notebooks}
+In the Learning space:
+\begin{enumerate}
+  \item Create a learning session
+  \item Add materials: paste text or upload files (PDF, DOCX, images)
+  \item The system extracts text, identifies key terms, and creates summaries
+  \item Ask questions --- the AI answers from your materials first, using general knowledge only when needed
+\end{enumerate}
+
+\section{Google Workspace Integration}
+In the Business space, connect your Google account for:
+\begin{itemize}
+  \item \textbf{Gmail search} (read-only): search and read email threads
+  \item \textbf{Calendar}: find free slots and draft calendar events
+  \item Calendar events are created as \emph{pending Business actions} requiring your approval
+\end{itemize}
+
+Setup: Go to Settings, click ``Connect Google Workspace'', and complete the OAuth flow.
+
+\section{Session Management}
+\begin{itemize}
+  \item Sessions are auto-titled by the LLM after the first message
+  \item Rename, delete, or clear sessions from the sidebar
+  \item \textbf{Compact}: summarize a long conversation to save context window space
+  \item \textbf{Context meter}: shows approximate token usage relative to the model's context window
+\end{itemize}
+
+%========================================================================
+\chapter{Privacy Guard}
+%========================================================================
+
+The Privacy Guard is a regex-based filter that scans user input \textbf{before} it leaves the device (e.g., before being sent to SearXNG for web search). It redacts:
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Pattern} & \textbf{Description} \\
+\midrule
+CNP & Romanian personal identification number (13 digits) \\
+EMAIL & Email addresses \\
+PHONE & Romanian mobile numbers (\texttt{+40 7xx...}) \\
+CARD & Credit card-like digit sequences (13--19 digits) \\
+APIKEY & API keys, tokens, bearer tokens \\
+PASSWORD & Lines matching \texttt{password: ...} patterns \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Redacted content appears as \texttt{[REDACTED:LABEL]} in the sanitized text. The UI shows a yellow tag when redactions occur, demonstrating to the user that sensitive data was stripped.
+
+%========================================================================
+\chapter{API Reference}
+%========================================================================
+
+All endpoints except \texttt{/health}, \texttt{/pair}, and \texttt{/pair/status} require a Firebase ID token as \texttt{Authorization: Bearer <token>}.
+
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Method} & \textbf{Path} & \textbf{Auth} & \textbf{Description} \\
+\midrule
+GET & \texttt{/health} & --- & System health and status \\
+POST & \texttt{/pair} & token & Claim device with pairing code \\
+GET & \texttt{/pair/status} & --- & Check pairing status \\
+\midrule
+GET & \texttt{/sessions} & owner & List chat sessions \\
+POST & \texttt{/sessions} & owner & Create a new session \\
+GET & \texttt{/sessions/\{id\}} & owner & Get one session \\
+PATCH & \texttt{/sessions/\{id\}} & owner & Rename session \\
+DELETE & \texttt{/sessions/\{id\}} & owner & Delete session \\
+GET & \texttt{/sessions/\{id\}/messages} & owner & List messages \\
+\midrule
+POST & \texttt{/chat} & owner & Non-streaming chat \\
+POST & \texttt{/chat/stream} & owner & SSE streaming chat \\
+POST & \texttt{/search} & owner & Raw SearXNG search \\
+\midrule
+GET & \texttt{/admin/llm/status} & owner & Model status \\
+GET & \texttt{/admin/llm/models} & owner & Available models \\
+POST & \texttt{/admin/llm/model} & owner & Change active model \\
+\midrule
+POST & \texttt{/attachments} & owner & Upload file \\
+GET & \texttt{/attachments/\{id\}/raw} & owner & Download file \\
+DELETE & \texttt{/attachments/\{id\}} & owner & Delete attachment \\
+\midrule
+GET & \texttt{/workspace/tree} & owner & Browse workspace \\
+GET & \texttt{/workspace/file} & owner & Read a file \\
+POST & \texttt{/workspace/file} & owner & Save a file \\
+POST & \texttt{/workspace/terminal} & owner & Run terminal command \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%========================================================================
+\chapter{Project Structure}
+%========================================================================
+
+\begin{lstlisting}
+backend/        FastAPI app, orchestrator, privacy guard,
+                LLM client, SQLite, terminal tools
+frontend/       Static HTML/CSS/JS chat UI fallback
+web/            Next.js 16 + Tailwind + Firebase Auth
+  electron/     Electron shell for desktop app
+  src/app/      Next.js page routes
+  src/components/ React UI components
+  src/lib/      Utilities, types, Firebase config
+agent/          Node.js heartbeat service
+searxng/        SearXNG upstream clone (gitignored)
+scripts/        install.sh, run_all.sh, run_api.sh, etc.
+data/           chat.db, attachments, cache, logs
+docs/           Documentation and assets
+firestore.*     Firestore rules and indexes
+firebase.json   Firebase Hosting config
+\end{lstlisting}
+
+\subsection{Key Backend Modules}
+\begin{description}[leftmargin=2em,style=nextline]
+  \item[\texttt{main.py}] FastAPI routes (1683 lines): chat, sessions, attachments, workspace, learning, business actions.
+  \item[\texttt{orchestrator.py}] Decides search need, builds LLM prompts, manages agent tool loops.
+  \item[\texttt{llm\_client.py}] Async OpenAI Responses API client with streaming and tool calling.
+  \item[\texttt{privacy\_guard.py}] Regex scanner that redacts sensitive patterns.
+  \item[\texttt{database.py}] SQLite layer: sessions, messages, attachments, learning materials, business actions, KV store.
+  \item[\texttt{auth.py}] Firebase ID token verification using Google's public x509 certificates.
+  \item[\texttt{searxng\_client.py}] Async SearXNG JSON search with DuckDuckGo HTML fallback.
+  \item[\texttt{terminal.py}] Sandboxed shell command execution with timeout, output capture, and safety checks.
+  \item[\texttt{converter.py}] Local file conversion using \texttt{sips} and LibreOffice.
+  \item[\texttt{pdf\_builder.py}] Pure-Python PDF renderer from Markdown with image embedding.
+  \item[\texttt{google\_workspace.py}] OAuth2, Gmail read-only, Google Calendar integration.
+  \item[\texttt{artifacts.py}] Extracts \texttt{<artifact>} HTML blocks from agent responses.
+  \item[\texttt{approvals.py}] In-memory approval gate for agent terminal commands.
+\end{description}
+
+%========================================================================
+\chapter{Troubleshooting}
+%========================================================================
+
+\begin{description}[leftmargin=1em]
+  \item[``OPENAI\_API\_KEY is not set''] Add your key to \texttt{.env} or \texttt{\textasciitilde/Library/Application Support/Privai/.env}.
+  \item[SearXNG not starting] Ensure \texttt{searxng/searx/settings\_local.yml} exists. Run \texttt{bash scripts/install.sh} again.
+  \item[Pairing code not appearing] The device is already paired. Check \texttt{GET /pair/status}.
+  \item[Agent commands blocked] Dangerous commands are blocked by default. Set \texttt{TERMINAL\_ALLOW\_DANGEROUS=true} to override.
+  \item[Google Workspace errors] Ensure \texttt{GOOGLE\_CLIENT\_ID} and \texttt{GOOGLE\_CLIENT\_SECRET} are set. Complete the OAuth flow in Settings.
+  \item[Context too long] Use the Compact button to summarize the conversation, or start a new session.
+  \item[File conversion fails] Image conversion requires macOS \texttt{sips}. Office-to-PDF requires LibreOffice (\texttt{brew install --cask libreoffice}).
+\end{description}
+
+%========================================================================
+\chapter*{Quick Reference Card}
+\addcontentsline{toc}{chapter}{Quick Reference Card}
+%========================================================================
+
+\begin{center}
+\begin{tabular}{@{}p{4cm}p{9cm}@{}}
+\toprule
+\textbf{Action} & \textbf{How} \\
+\midrule
+Start everything & \texttt{bash scripts/run\_all.sh} \\
+Open web UI & \texttt{http://localhost:3000} \\
+Desktop app (dev) & \texttt{cd web \&\& npm run desktop:dev} \\
+Build installer & \texttt{cd web \&\& npm run dist} \\
+Change model & Settings page or \texttt{POST /admin/llm/model} \\
+Force web search & Toggle the search icon in the composer \\
+Use agent mode & Toggle the Agent button in the composer \\
+Convert files & Attach files + type ``convert to PDF'' \\
+Open workspace & File > Open Workspace (desktop app) \\
+Pair new device & Delete \texttt{data/chat.db}, restart backend \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

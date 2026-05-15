@@ -27,7 +27,7 @@ def _count_close(text: str, tag: str) -> int:
 
 
 def _repair_html(content: str) -> str | None:
-    """Best-effort salvage for local models that stop mid-artifact.
+    """Best-effort salvage for model responses that stop mid-artifact.
 
     A truncated artifact is still better rendered as a downloadable preview
     than dumped into the chat as raw HTML. We only repair obvious full HTML

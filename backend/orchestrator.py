@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from . import privacy_guard, runtime, terminal
+from . import business, google_workspace, privacy_guard, runtime, terminal
 from .config import settings
 from .llm_client import LLMClient
 from .searxng_client import SearxngClient
@@ -91,6 +91,9 @@ class ChatPrep:
     redactions: list[str]
     mode: str = "chat"
     model: str | None = None
+    provider: str | None = None
+    route_reason: str | None = None
+    routed_sensitive: bool = False
     used_vision: bool = False
 
 
@@ -315,43 +318,110 @@ def _filter_relevant_sources(results: list[dict], topic: str, limit: int) -> lis
 
 
 SYSTEM_PROMPT = (
-    "You are a privacy-first local assistant running on the user's own hardware. "
-    "Be concise. If web context is provided, ground your answer in it and cite sources "
-    "by their [n] reference. If no context is provided, answer from your own knowledge "
-    "and say so. Never invent URLs. When recommending websites, products, stores, "
-    "or articles from web context, include useful Markdown links using the provided "
-    "URLs. Reply in the user's language."
+    "You are Privai, a privacy-first local assistant running on the user's own "
+    "hardware. Help everyday users and businesses get useful work done. Be "
+    "clear, practical, and concise. If web context is provided, ground your "
+    "answer in it and cite sources by their [n] reference. If no context is "
+    "provided, answer from your own knowledge and say so. Never invent URLs. "
+    "When recommending websites, products, stores, or articles from web "
+    "context, include useful Markdown links using the provided URLs. Reply in "
+    "the user's language."
 )
 
 AGENT_SYSTEM_PROMPT = (
-    "You are a coding agent running locally on the user's hardware, similar in "
-    "spirit to Codex or Claude Code. Your job is to work in the selected "
-    "workspace, use the terminal, create or edit real files, run checks, and "
-    "leave the user with something they can run.\n"
+    "You are Privai Agent, a local work agent running on the user's hardware, "
+    "similar in spirit to Codex or Claude Code but useful for both businesses "
+    "and developers. Your job is to work in the selected workspace, use the "
+    "terminal when needed, create or edit real files, run checks, and leave the "
+    "user with something they can use.\n"
     "\n"
     "Rules:\n"
-    "1. Use the terminal tool for coding work: inspect the workspace first, "
+    "1. Use the terminal tool for practical work: inspect the workspace first, "
     "then create/edit files, install dependencies when needed, and run focused "
-    "verification commands.\n"
+    "verification commands. For business tasks, create useful workflow docs, "
+    "templates, spreadsheets, scripts, dashboards, or small apps as appropriate.\n"
     "2. Keep all file work inside the workspace root. If the user wants an app "
     "on the Desktop, create a project folder inside the selected Desktop "
     "workspace or tell them to use File > Open Workspace... first.\n"
     "3. Prefer real project files over pasted code. For apps, create a normal "
     "folder with source files and package/config files rather than returning a "
-    "long code block.\n"
+    "long code block. For business automation, create files the user can open, "
+    "reuse, and share.\n"
     "4. Use non-interactive commands only. If a command would prompt, choose "
     "flags that make it non-interactive or explain the exact manual command.\n"
     "5. Be careful with destructive commands. Do not delete, reset, overwrite "
     "large directories, or run privileged commands unless the user explicitly "
     "asked for that exact action.\n"
     "6. When finished, summarize what changed, list important file paths, and "
-    "give the command to run the app or check the result.\n"
-    "7. If the user asks only for a quick visual preview or a single-file demo, "
+    "give the command to run the app, open the files, or check the result.\n"
+    "7. For app/code changes, do not claim the work is done until you have run "
+    "a relevant verification command such as lint, tests, build, or a smoke "
+    "check. For business files, verify that the files exist and are in the "
+    "right workspace. If verification cannot run, say exactly why and what "
+    "command the user should run.\n"
+    "8. For Vite/React apps, do not use `npx tailwindcss init -p` unless the "
+    "user explicitly asks for legacy Tailwind setup. Prefer plain CSS, and "
+    "before finalizing verify that every relative import exists, especially "
+    "`./App.css` and local assets. Run `npm run build` and fix missing imports "
+    "or broken assets before saying the app is ready.\n"
+    "9. If a scaffolding command exits non-zero after creating files, inspect "
+    "the created folder and continue from the existing package.json instead of "
+    "blindly failing or rerunning the scaffold.\n"
+    "10. If the user asks only for a quick visual preview or a single-file demo, "
     "you may return one complete self-contained HTML document inside an "
     "<artifact> block. For normal software/app requests, use files.\n"
-    "8. Reply in the user's language for the prose; code and commands stay "
+    "11. Reply in the user's language for the prose; code and commands stay "
     "English.\n"
+    "12. In Business space, use Google Workspace tools when the user asks "
+    "about email, clients, meetings, calendars, availability, scheduling, or "
+    "business follow-up. Gmail access is read-only. Calendar creation must be "
+    "drafted as a pending Business action for user approval before it happens.\n"
 )
+
+
+def _experience_system_note(experience: dict | None) -> str:
+    if not experience:
+        return ""
+
+    persona_labels = {
+        "business": "business owner or operator",
+        "developer": "developer or technical builder",
+        "creator": "creator or marketer",
+        "student": "student or researcher",
+    }
+    goal_labels = {
+        "automate": "automate repetitive work",
+        "build": "build or fix software",
+        "research": "research and explain topics",
+        "documents": "work with documents, PDFs, and reports",
+    }
+    detail_labels = {
+        "simple": "plain language, fewer technical details",
+        "balanced": "clear steps with useful context",
+        "technical": "more implementation details and exact commands",
+    }
+
+    persona = str(experience.get("persona") or "").lower()
+    goal = str(experience.get("primaryGoal") or "").lower()
+    detail = str(experience.get("detailLevel") or "").lower()
+    context = str(experience.get("businessContext") or "").strip()[:240]
+
+    parts = [
+        "User experience profile:",
+        f"- Main use: {persona_labels.get(persona, 'general work')}.",
+        f"- Primary goal: {goal_labels.get(goal, 'get useful work done')}.",
+        f"- Preferred answer style: {detail_labels.get(detail, 'clear steps with useful context')}.",
+    ]
+    if context:
+        parts.append(f"- User context: {context}.")
+
+    parts.append(
+        "Adapt the response and any created files to this profile. For business "
+        "users, prefer practical workflows, checklists, templates, dashboards, "
+        "and automation plans over developer jargon. For developers, include "
+        "the exact project files, commands, and verification details."
+    )
+    return "\n".join(parts)
 
 
 @lru_cache(maxsize=1)
@@ -368,12 +438,19 @@ def _system_prompt_for(mode: str) -> str:
         return SYSTEM_PROMPT
     guidelines = _agent_guidelines()
     prompt = AGENT_SYSTEM_PROMPT if not guidelines else f"{AGENT_SYSTEM_PROMPT}\n\n{guidelines}"
-    if settings.terminal_enabled:
+    workspace_root = terminal.workspace_root_or_none()
+    if settings.terminal_enabled and workspace_root:
         prompt += (
             "\n\nTerminal workspace root: "
-            f"{terminal.workspace_root()}. Use `cwd: \".\"` for this root. "
+            f"{workspace_root}. Use `cwd: \".\"` for this root. "
             "Run focused inspection commands before making claims about files "
             "or project behavior."
+        )
+    elif mode == "agent":
+        prompt += (
+            "\n\nNo coding workspace is selected yet. If the user asks you to "
+            "read files, edit files, run commands, or build an app, tell them "
+            "to open or create a workspace in Coding first."
         )
     return prompt
 
@@ -393,8 +470,21 @@ class Orchestrator:
         self.llm = llm
         self.search = search
 
-    async def _execute_agent_tool(self, name: str, args: dict) -> str:
+    async def _execute_agent_tool(
+        self,
+        name: str,
+        args: dict,
+        owner_uid: str | None = None,
+    ) -> str:
         if name != "run_terminal_command":
+            if owner_uid and name in {
+                "search_email",
+                "read_email_thread",
+                "find_calendar_slots",
+                "draft_calendar_event",
+                "create_calendar_event",
+            }:
+                return await google_workspace.execute_tool(owner_uid, name, args)
             return terminal.error_json(f"unknown tool: {name}")
         command = str(args.get("command") or "")
         cwd = str(args.get("cwd") or ".")
@@ -408,21 +498,48 @@ class Orchestrator:
     def _should_use_agent_tools(self, prep: ChatPrep) -> bool:
         return (
             prep.mode == "agent"
-            and settings.llm_provider == "openai"
-            and settings.terminal_enabled
+            and (prep.provider or settings.llm_provider) == "gemini"
             and not prep.used_vision
+            and (
+                (settings.terminal_enabled and terminal.workspace_root_or_none())
+                or google_workspace.configured()
+            )
         )
 
-    async def complete(self, prep: ChatPrep) -> str:
+    async def complete(
+        self,
+        prep: ChatPrep,
+        on_tool_event=None,
+        request_tool_approval=None,
+        owner_uid: str | None = None,
+    ) -> str:
+        llm = (
+            self.llm
+            if not prep.provider or prep.provider == self.llm.provider
+            else LLMClient(provider=prep.provider)
+        )
         if self._should_use_agent_tools(prep):
-            return await self.llm.chat_with_tools(
+            tools: list[dict] = []
+            if settings.terminal_enabled and terminal.workspace_root_or_none():
+                tools.append(terminal.TERMINAL_TOOL)
+            if owner_uid and google_workspace.configured():
+                tools.extend(google_workspace.GOOGLE_WORKSPACE_TOOLS)
+            if not tools:
+                return await llm.chat(prep.messages, model=prep.model)
+
+            async def execute_tool(name: str, args: dict) -> str:
+                return await self._execute_agent_tool(name, args, owner_uid)
+
+            return await llm.chat_with_tools(
                 prep.messages,
-                tools=[terminal.TERMINAL_TOOL],
-                execute_tool=self._execute_agent_tool,
+                tools=tools,
+                execute_tool=execute_tool,
                 model=prep.model,
                 max_iterations=max(1, min(settings.agent_max_tool_steps, 50)),
+                on_tool_event=on_tool_event,
+                request_tool_approval=request_tool_approval,
             )
-        return await self.llm.chat(prep.messages, model=prep.model)
+        return await llm.chat(prep.messages, model=prep.model)
 
     async def _search_relevant_sources(
         self,
@@ -469,6 +586,8 @@ class Orchestrator:
         attachments_text: str | None = None,
         search_top_k: int | None = None,
         image_payloads: list[str] | None = None,
+        experience: dict | None = None,
+        privacy_mode: str | None = None,
     ) -> ChatPrep:
         guard = privacy_guard.scan(message)
         safe_message = guard.text
@@ -499,7 +618,22 @@ class Orchestrator:
                 results = []
                 safe_message = f"{safe_message}\n\n[note: web search failed: {e}]"
 
+        route_text = "\n\n".join(
+            part for part in [safe_message, attachments_text or ""] if part
+        )
+        chosen_provider, route_reason, routed_sensitive = business.choose_provider(
+            privacy_mode or (experience or {}).get("privacyMode"),
+            route_text,
+        )
+
         sys_prompt = _system_prompt_for(mode)
+        experience_note = _experience_system_note(experience)
+        if experience_note:
+            sys_prompt = f"{sys_prompt}\n\n{experience_note}"
+        sys_prompt = (
+            f"{sys_prompt}\n\nPrivacy routing: {route_reason}. "
+            f"Active model provider for this turn: {chosen_provider}."
+        )
         messages: list[dict] = [{"role": "system", "content": sys_prompt}]
         for h in history or []:
             messages.append({"role": h["role"], "content": h["content"]})
@@ -526,7 +660,10 @@ class Orchestrator:
             sources=results,
             redactions=guard.redactions,
             mode=mode,
-            model=runtime.get_vision_model() if image_payloads else None,
+            model=runtime.get_vision_model(chosen_provider) if image_payloads else None,
+            provider=chosen_provider,
+            route_reason=route_reason,
+            routed_sensitive=routed_sensitive,
             used_vision=bool(image_payloads),
         )
 
@@ -539,6 +676,8 @@ class Orchestrator:
         attachments_text: str | None = None,
         search_top_k: int | None = None,
         image_payloads: list[str] | None = None,
+        experience: dict | None = None,
+        privacy_mode: str | None = None,
     ) -> ChatTurn:
         prep = await self.prepare(
             message,
@@ -548,6 +687,8 @@ class Orchestrator:
             attachments_text=attachments_text,
             search_top_k=search_top_k,
             image_payloads=image_payloads,
+            experience=experience,
+            privacy_mode=privacy_mode,
         )
         answer = await self.complete(prep)
         return ChatTurn(

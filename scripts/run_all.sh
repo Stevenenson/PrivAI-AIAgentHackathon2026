@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up Ollama + SearXNG + API in one shell. Ctrl-C tears them all down.
+# Bring up SearXNG + API in one shell. Ctrl-C tears them all down.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,11 +14,7 @@ fi
 LOG_DIR="$ROOT/data/logs"
 mkdir -p "$LOG_DIR"
 
-if [ "${LLM_PROVIDER:-openai}" = "ollama" ]; then
-  bash "$ROOT/scripts/run_ollama.sh"
-else
-  echo "using OpenAI provider; skipping Ollama daemon"
-fi
+echo "using Gemini provider"
 
 echo "starting searxng (logs: $LOG_DIR/searxng.log)"
 bash "$ROOT/scripts/run_searxng.sh" >"$LOG_DIR/searxng.log" 2>&1 &

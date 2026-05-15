@@ -2,7 +2,7 @@
   "name": "privai",
   "version": "0.1.0",
   "private": true,
-  "description": "Privai desktop AI workspace app",
+  "description": "Privai desktop AI workspace for business automation, documents, and app building",
   "author": "Privai",
   "main": "electron/main.cjs",
   "scripts": {
@@ -10,16 +10,21 @@
     "build": "next build",
     "build:standalone": "next build && node electron/prepare-standalone.cjs",
     "build:backend": "cd .. && bash scripts/build_backend_binary.sh",
+    "prepare:icons": "node electron/generate-icons.cjs",
     "desktop:dev": "electron .",
-    "desktop:pack": "npm run build:standalone && electron-builder --dir",
-    "dist": "npm run build:backend && npm run build:standalone && electron-builder",
+    "desktop:pack": "npm run prepare:icons && npm run build:standalone && electron-builder --dir",
+    "dist": "npm run prepare:icons && npm run build:backend && npm run build:standalone && electron-builder",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
     "firebase": "^12.13.0",
     "lucide-react": "^1.14.0",
+    "monaco-editor": "^0.55.1",
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -41,7 +46,10 @@
   "build": {
     "appId": "ro.privai.desktop",
     "productName": "Privai",
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      ".next/standalone/**/*"
+    ],
     "files": [
       "electron/**/*",
       ".next/standalone/**/*",
@@ -59,12 +67,22 @@
       }
     ],
     "mac": {
-      "category": "public.app-category.developer-tools",
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
       "identity": null,
       "target": [
         "dmg",
         "zip"
       ]
+    },
+    "dmg": {
+      "title": "Privai",
+      "backgroundColor": "#0b0d12",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "iconSize": 96
     },
     "win": {
       "target": [
@@ -72,11 +90,12 @@
       ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "Development"
+      "category": "Office"
     }
   }
 }

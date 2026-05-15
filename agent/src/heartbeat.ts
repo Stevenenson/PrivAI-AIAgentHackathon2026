@@ -6,7 +6,6 @@ import { FieldValue, db } from "./firebase.js";
 interface HealthResult {
   llm: boolean;
   provider: string;
-  ollama: boolean;
   searxng: boolean;
   model: string;
   paired: boolean;
@@ -77,7 +76,6 @@ export function startHeartbeat() {
         provider: ok ? health!.provider : "",
         ramMb: null,
         llm: ok ? health!.llm : false,
-        ollama: ok ? health!.ollama : false,
         searxng: ok ? health!.searxng : false,
         agentVersion: env.agentVersion,
         version: ok ? health!.version : null,

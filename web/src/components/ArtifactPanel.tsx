@@ -7,9 +7,10 @@ import type { Artifact } from "@/lib/types";
 interface Props {
   artifact: Artifact;
   onClose: () => void;
+  embedded?: boolean;
 }
 
-export function ArtifactPanel({ artifact, onClose }: Props) {
+export function ArtifactPanel({ artifact, onClose, embedded = false }: Props) {
   const [bust, setBust] = useState(0);
 
   function reload() {
@@ -36,7 +37,13 @@ export function ArtifactPanel({ artifact, onClose }: Props) {
   }
 
   return (
-    <aside className="flex flex-col border-l border-line bg-surface min-w-0 min-h-[360px]">
+    <section
+      className={
+        embedded
+          ? "flex min-h-[360px] min-w-0 flex-1 flex-col bg-surface"
+          : "flex flex-col border-l border-line bg-surface min-w-0 min-h-[360px]"
+      }
+    >
       <header className="flex items-center justify-between px-4 py-3 border-b border-line">
         <div className="min-w-0">
           <div className="text-[11px] uppercase tracking-wider text-muted">
@@ -88,7 +95,7 @@ export function ArtifactPanel({ artifact, onClose }: Props) {
           title={artifact.title}
         />
       </div>
-    </aside>
+    </section>
   );
 }
 

@@ -1,21 +1,18 @@
-# Local AI Assistant — Licenta Prototype
+# Privai — Gemini Work Assistant
 
-Local AI assistant: an OpenAI-backed LLM by default, talking to a local
-metasearch engine (SearXNG), exposed through a FastAPI backend and a mobile-friendly
-web chat. Chat history still stays in local SQLite; prompts are sent to OpenAI
-when `LLM_PROVIDER=openai`.
+Privai is a desktop AI workspace for business automation, documents, and app
+building. It uses the Gemini API for model responses and stores chat history in
+local SQLite on the device.
 
-This MacBook prototype is a stepping stone toward the same software running on a
-RISC-V single-board computer (Milk-V Jupiter / StarFive VisionFive 2). The code
-avoids macOS-specific dependencies so the port is mostly a hardware swap.
+The Electron app is the main product surface. The backend remains portable so
+the same core can later run on a local server or RISC-V board.
 
 ## Architecture
 
 Storage posture: chat history lives on the device in SQLite. Firebase is used
-**only for identity** (sign in, ID tokens) and heartbeat metadata. With the
-default `openai` provider, prompt content is sent from the backend to OpenAI for
-generation; with `ollama`, generation stays local. The web app talks to the
-device's FastAPI directly with a `Bearer <id-token>` header.
+**only for identity** (sign in, ID tokens) and heartbeat metadata. Prompt
+content is sent from the backend to Gemini for generation. The web app talks to
+the device's FastAPI directly with a `Bearer <id-token>` header.
 
 ```
 ┌──────────────────────────────┐         Firebase
@@ -33,8 +30,7 @@ device's FastAPI directly with a `Bearer <id-token>` header.
 │  /chat/stream SSE token-stream
 │  /admin/llm/* start/stop     │
 └──┬───────────────────────────┘
-   ├─→ OpenAI Responses API (default LLM provider)
-   ├─→ Ollama :11434       (optional local LLM provider)
+   ├─→ Gemini API
    ├─→ SearXNG :8888       (local search)
    ├─→ Privacy guard       (regex redaction)
    └─→ SQLite              (chats live HERE, only here)
@@ -60,8 +56,7 @@ ground its answer and cite `[n]`.
 ## Prerequisites
 
 - macOS (Apple Silicon ok), Python 3.11+, git
-- An OpenAI API key in the repo-root `.env`
-- Optional: [Ollama](https://ollama.com/download) if `LLM_PROVIDER=ollama`
+- A Gemini API key in the repo-root `.env`
 
 ## Install
 
@@ -72,13 +67,12 @@ bash scripts/install.sh
 This creates `.venv/`, installs the FastAPI deps, clones SearXNG into
 `searxng/`, and installs its requirements.
 
-Set the OpenAI key and model in `.env`:
+Set the Gemini key and model in `.env`:
 
 ```sh
-LLM_PROVIDER=openai
-OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-5.4-mini
-OPENAI_VISION_MODEL=gpt-5.4-mini
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-3.1-pro-preview
+GEMINI_VISION_MODEL=gemini-3.1-pro-preview
 ```
 
 ## Run everything
@@ -88,7 +82,7 @@ bash scripts/run_all.sh
 ```
 
 This starts SearXNG on `127.0.0.1:8888` and FastAPI on `0.0.0.0:8080`.
-If `LLM_PROVIDER=ollama`, it also starts the Ollama daemon first. Open `http://127.0.0.1:8080/` from your laptop, or
+Open `http://127.0.0.1:8080/` from your laptop, or
 `http://<laptop-LAN-ip>:8080/` from your phone (same Wi-Fi).
 
 `Ctrl-C` stops the API; SearXNG is killed via the script's trap.
@@ -97,7 +91,6 @@ If `LLM_PROVIDER=ollama`, it also starts the Ollama daemon first. Open `http://1
 
 | What | Command |
 | --- | --- |
-| Ollama only, optional | `bash scripts/run_ollama.sh` |
 | SearXNG only | `bash scripts/run_searxng.sh` |
 | API only | `bash scripts/run_api.sh` |
 
@@ -107,20 +100,18 @@ All knobs are env vars (`backend/config.py`):
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `openai` | `openai` or `ollama` |
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | default OpenAI text model |
-| `OPENAI_VISION_MODEL` | `gpt-5.4-mini` | model used for image attachments |
-| `OPENAI_REASONING_EFFORT` | `low` | OpenAI reasoning effort for reasoning models |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama base URL |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | model tag when `LLM_PROVIDER=ollama` |
+| `GEMINI_API_KEY` | — | Gemini API key |
+| `GEMINI_MODEL` | `gemini-3.1-pro-preview` | default Gemini text model |
+| `GEMINI_VISION_MODEL` | `gemini-3.1-pro-preview` | model used for image attachments |
+| `GEMINI_THINKING_LEVEL` | `high` | Gemini thinking level |
 | `SEARXNG_URL` | `http://127.0.0.1:8888` | SearXNG base URL |
 | `API_HOST` | `0.0.0.0` | bind addr (so phone can reach it) |
 | `API_PORT` | `8080` | bind port |
 | `SEARCH_TOP_K` | `50` | search results passed to LLM |
-| `OPENAI_CONTEXT_WINDOW` | `400000` | context meter when OpenAI is active |
-| `LLM_NUM_CTX` | `8192` | Ollama context window |
-| `WORKSPACE_ROOT` | repo root | directory where agent terminal commands run |
+| `SEARCH_FALLBACK_ENABLED` | `true` | use a no-key web fallback when local SearXNG is offline |
+| `SEARCH_FALLBACK_URL` | `https://html.duckduckgo.com/html/` | fallback search endpoint |
+| `GEMINI_CONTEXT_WINDOW` | `1000000` | context meter when Gemini is active |
+| `WORKSPACE_ROOT` | empty | directory where agent terminal commands run after selecting a workspace |
 | `TERMINAL_ENABLED` | `true` | expose terminal tool in agent mode |
 | `TERMINAL_TIMEOUT_S` | `60` | default terminal command timeout |
 | `TERMINAL_MAX_OUTPUT_CHARS` | `20000` | captured stdout/stderr cap per stream |
@@ -222,22 +213,28 @@ Installed desktop builds read their local API key from:
 ~/Library/Application Support/Privai/.env
 ```
 
-The first app launch creates that file with placeholders. Add `OPENAI_API_KEY`
+The first app launch creates that file with placeholders. Add `GEMINI_API_KEY`
 there, then restart the app. Use **File → Open Workspace...** to choose the
 folder where agent terminal commands should run.
 
-## Porting to RISC-V (later)
+### Release readiness
 
-The prototype is intentionally portable:
+Current desktop builds include:
 
-- Replace `qwen2.5:3b` with `qwen2.5:0.5b`, `llama3.2:1b`, or a `llama.cpp`
-  GGUF setup (Ollama on RISC-V isn't reliable yet — `llama.cpp` is).
-- If swapping to `llama.cpp` server, only `backend/llm_client.py` needs to
-  change (or run `llama-server` with its OpenAI-compatible API and adjust
-  `ollama_url`).
-- SearXNG runs the same way on Linux (Debian/Ubuntu image for RISC-V).
-- Cap `SEARCH_TOP_K` and `LLM_NUM_CTX` lower for 4 GB RAM boards.
-- `scripts/run_*.sh` are bash and should work on the target distro.
+- Privai app branding, web favicon, startup splash, and packaged mac icon.
+- `asar` packaging with the Next standalone server unpacked where Node can run it.
+- DMG and ZIP outputs in `web/dist/`.
+- Command approval on by default, with optional auto-approval for safe read-only
+  inspection commands.
+- Gemini-only model routing.
+
+Still required before a public website download:
+
+- Apple Developer ID signing and notarization.
+- Auto-update feed and release channel.
+- Real Google OAuth credentials for Gmail and Calendar integrations.
+- Product website download page and support/privacy pages.
+
 
 ## Layout
 
@@ -258,7 +255,7 @@ docs/         arhitectura, firebase_setup, rezultate (work in progress)
 
 ```sh
 # 1) device stack — prints PAIRING CODE on first boot
-bash scripts/run_all.sh                 # OpenAI provider + SearXNG + FastAPI
+bash scripts/run_all.sh                 # Gemini provider + SearXNG + FastAPI
 
 # 2) board agent — writes heartbeat to Firestore
 cd agent && cp .env.example .env        # set GOOGLE_APPLICATION_CREDENTIALS

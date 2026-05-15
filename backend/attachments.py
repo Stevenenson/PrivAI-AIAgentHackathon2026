@@ -12,7 +12,9 @@ import os
 import re
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from .config import settings
 
@@ -64,6 +66,8 @@ def store_bytes(owner_uid: str, name: str, data: bytes, mime: str) -> tuple[str,
     text_excerpt: str | None = None
     if _is_pdf(mime, name):
         text_excerpt = _extract_pdf_text(path)
+    elif _is_docx(mime, name):
+        text_excerpt = _extract_docx_text(path)
     elif _is_text(mime, name):
         try:
             text_excerpt = data[:TEXT_PREVIEW_BYTES].decode("utf-8", errors="replace")
@@ -74,6 +78,14 @@ def store_bytes(owner_uid: str, name: str, data: bytes, mime: str) -> tuple[str,
 
 def _is_pdf(mime: str, name: str) -> bool:
     return (mime or "").lower() == "application/pdf" or name.lower().endswith(".pdf")
+
+
+def _is_docx(mime: str, name: str) -> bool:
+    m = (mime or "").lower()
+    return (
+        m == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        or name.lower().endswith(".docx")
+    )
 
 
 def _extract_pdf_text(path: Path) -> str | None:
@@ -95,13 +107,36 @@ def _extract_pdf_text(path: Path) -> str | None:
     return proc.stdout[:TEXT_PREVIEW_BYTES].decode("utf-8", errors="replace")
 
 
+def _extract_docx_text(path: Path) -> str | None:
+    try:
+        with zipfile.ZipFile(path) as docx:
+            raw = docx.read("word/document.xml")
+    except Exception:
+        return None
+    try:
+        root = ElementTree.fromstring(raw)
+    except ElementTree.ParseError:
+        return None
+
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs: list[str] = []
+    for para in root.findall(".//w:p", ns):
+        chunks = [node.text or "" for node in para.findall(".//w:t", ns)]
+        text = "".join(chunks).strip()
+        if text:
+            paragraphs.append(text)
+    if not paragraphs:
+        return None
+    return "\n".join(paragraphs)[:TEXT_PREVIEW_BYTES]
+
+
 def _is_text(mime: str, name: str) -> bool:
     m = (mime or "").lower()
     if m.startswith("text/"):
         return True
     if m in _TEXT_MIME_WHITELIST:
         return True
-    # Heuristic by extension — Ollama output, .md notes, etc.
+    # Heuristic by extension for generated output, .md notes, etc.
     ext = os.path.splitext(name.lower())[1]
     if ext in {
         ".md", ".txt", ".py", ".ts", ".tsx", ".js", ".jsx", ".json",

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -9,6 +9,7 @@ const path = require("path");
 const DEFAULT_UI_PORT = 3100;
 const DEFAULT_API_PORT = 8080;
 const HOST = "127.0.0.1";
+const UI_HOST = "localhost";
 
 app.setName("Privai");
 
@@ -43,18 +44,18 @@ function validPort(value, fallback) {
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : fallback;
 }
 
-function canListen(port) {
+function canListen(port, host = HOST) {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once("error", () => resolve(false));
     server.once("listening", () => {
       server.close(() => resolve(true));
     });
-    server.listen(port, HOST);
+    server.listen(port, host);
   });
 }
 
-function getOpenPort(excluded = new Set()) {
+function getOpenPort(excluded = new Set(), host = HOST) {
   return new Promise((resolve) => {
     const listen = () => {
       const server = net.createServer();
@@ -67,17 +68,17 @@ function getOpenPort(excluded = new Set()) {
           else listen();
         });
       });
-      server.listen(0, HOST);
+      server.listen(0, host);
     };
     listen();
   });
 }
 
-async function pickPort(preferred, label, excluded = new Set()) {
-  if (!excluded.has(preferred) && (await canListen(preferred))) {
+async function pickPort(preferred, label, excluded = new Set(), host = HOST) {
+  if (!excluded.has(preferred) && (await canListen(preferred, host))) {
     return preferred;
   }
-  const port = await getOpenPort(excluded);
+  const port = await getOpenPort(excluded, host);
   console.warn(`[desktop] ${label} port ${preferred} is busy; using ${port}`);
   return port;
 }
@@ -91,9 +92,10 @@ async function choosePorts() {
     validPort(process.env.PRIVAI_UI_PORT, DEFAULT_UI_PORT),
     "ui",
     new Set([apiPort]),
+    UI_HOST,
   );
   console.log(`[desktop] backend http://${HOST}:${apiPort}`);
-  console.log(`[desktop] ui http://${HOST}:${uiPort}`);
+  console.log(`[desktop] ui http://${UI_HOST}:${uiPort}`);
 }
 
 function isRunning(child) {
@@ -121,10 +123,10 @@ function writeDesktopConfig(patch) {
 function readWorkspaceRoot() {
   if (process.env.WORKSPACE_ROOT) return process.env.WORKSPACE_ROOT;
   const cfg = readDesktopConfig();
-  if (cfg.workspaceRoot && fs.existsSync(cfg.workspaceRoot)) {
+  if (cfg.workspaceExplicit && cfg.workspaceRoot && fs.existsSync(cfg.workspaceRoot)) {
     return cfg.workspaceRoot;
   }
-  return isDev() ? repoRoot() : app.getPath("home");
+  return "";
 }
 
 function ensurePairingCode() {
@@ -159,10 +161,14 @@ function desktopEnv() {
     fs.writeFileSync(
       userEnv,
       [
-        "LLM_PROVIDER=openai",
-        "OPENAI_API_KEY=",
-        "OPENAI_MODEL=gpt-5.4-mini",
-        "OPENAI_VISION_MODEL=gpt-5.4-mini",
+        "LLM_PROVIDER=gemini",
+        "GEMINI_API_KEY=",
+        "GEMINI_MODEL=gemini-3.1-pro-preview",
+        "GEMINI_VISION_MODEL=gemini-3.1-pro-preview",
+        "GEMINI_THINKING_LEVEL=high",
+        "GOOGLE_CLIENT_ID=",
+        "GOOGLE_CLIENT_SECRET=",
+        "GOOGLE_REDIRECT_URI=http://127.0.0.1:8080/google/oauth/callback",
         "",
       ].join("\n"),
       { mode: 0o600 },
@@ -180,13 +186,55 @@ function desktopEnv() {
 }
 
 function writeWorkspaceRoot(workspaceRoot) {
-  writeDesktopConfig({ workspaceRoot });
+  writeDesktopConfig({ workspaceRoot, workspaceExplicit: true });
+}
+
+function cleanWorkspaceName(rawName) {
+  const fallback = "privai-project";
+  const name = String(rawName || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "")
+    .replace(/^[.-]+/, "")
+    .slice(0, 80);
+  return name || fallback;
+}
+
+function setWorkspace(workspaceRoot) {
+  const next = path.resolve(String(workspaceRoot || ""));
+  if (!next || !fs.existsSync(next) || !fs.statSync(next).isDirectory()) {
+    throw new Error("Workspace folder does not exist");
+  }
+  writeWorkspaceRoot(next);
+  restartBackend();
+  return next;
 }
 
 function logFile(name) {
   const dir = userDataPath("logs");
   ensureDir(dir);
   return fs.openSync(path.join(dir, name), "a");
+}
+
+function logsDir() {
+  const dir = userDataPath("logs");
+  ensureDir(dir);
+  return dir;
+}
+
+function openLogs() {
+  return shell.openPath(logsDir());
+}
+
+function openAppData() {
+  ensureDir(app.getPath("userData"));
+  return shell.openPath(app.getPath("userData"));
+}
+
+function revealEnvFile() {
+  desktopEnv();
+  shell.showItemInFolder(userDataPath(".env"));
+  return Promise.resolve();
 }
 
 function spawnLogged(command, args, options, label) {
@@ -209,8 +257,8 @@ function backendEnv() {
   const dataDir = userDataPath("data");
   ensureDir(dataDir);
   return {
-    ...desktopEnv(),
     ...process.env,
+    ...desktopEnv(),
     API_HOST: HOST,
     API_PORT: String(apiPort),
     DB_PATH: path.join(dataDir, "chat.db"),
@@ -260,7 +308,7 @@ function startNext() {
   if (isDev()) {
     uiProc = spawnLogged(
       "npm",
-      ["run", "dev", "--", "--hostname", HOST, "--port", String(uiPort)],
+      ["run", "dev", "--", "--hostname", UI_HOST, "--port", String(uiPort)],
       {
         cwd: webRoot(),
         env: {
@@ -274,15 +322,23 @@ function startNext() {
   }
 
   const server = path.join(webRoot(), ".next", "standalone", "server.js");
+  const unpackedServer = path.join(
+    process.resourcesPath,
+    "app.asar.unpacked",
+    ".next",
+    "standalone",
+    "server.js",
+  );
+  const activeServer = fs.existsSync(unpackedServer) ? unpackedServer : server;
   uiProc = spawnLogged(
     process.execPath,
-    [server],
+    [activeServer],
     {
-      cwd: path.dirname(server),
+      cwd: path.dirname(activeServer),
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
-        HOSTNAME: HOST,
+        HOSTNAME: UI_HOST,
         PORT: String(uiPort),
         NEXT_PUBLIC_DEFAULT_BOARD_URL: `http://${HOST}:${apiPort}`,
       },
@@ -314,23 +370,97 @@ function waitForUrl(url, timeoutMs = 30000) {
   });
 }
 
+function splashUrl() {
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b0d12;
+      color: #ececec;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      display: grid;
+      gap: 18px;
+      justify-items: center;
+      text-align: center;
+    }
+    .mark {
+      width: 82px;
+      height: 82px;
+      border-radius: 20px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(79, 140, 255, 0.36);
+      background: linear-gradient(135deg, #4f8cff, #45d483);
+      color: white;
+      font-size: 44px;
+      font-weight: 900;
+      box-shadow: 0 18px 60px rgba(79, 140, 255, 0.24);
+    }
+    h1 {
+      margin: 0;
+      font-size: 36px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0;
+      color: #8a90a0;
+      font-size: 14px;
+    }
+    .bar {
+      width: 180px;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #20242e;
+    }
+    .bar span {
+      display: block;
+      width: 42%;
+      height: 100%;
+      border-radius: inherit;
+      background: #4f8cff;
+      animation: load 1.2s ease-in-out infinite;
+    }
+    @keyframes load {
+      0% { transform: translateX(-110%); }
+      100% { transform: translateX(260%); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">P</div>
+    <h1>Privai</h1>
+    <p>Starting private workspace...</p>
+    <div class="bar"><span></span></div>
+  </main>
+</body>
+</html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
 async function createWindow() {
   await choosePorts();
-  startBackend();
-  startNext();
-  const url = `http://${HOST}:${uiPort}`;
-  try {
-    await waitForUrl(url);
-  } catch (err) {
-    dialog.showErrorBox("Privai failed to start", String(err));
-  }
-
+  const url = `http://${UI_HOST}:${uiPort}`;
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 880,
     minWidth: 960,
     minHeight: 680,
     title: "Privai",
+    backgroundColor: "#0b0d12",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -342,11 +472,20 @@ async function createWindow() {
     },
   });
 
-  mainWindow.loadURL(url);
+  mainWindow.loadURL(splashUrl());
+  startBackend();
+  startNext();
+  try {
+    await waitForUrl(url);
+    if (!mainWindow.isDestroyed()) mainWindow.loadURL(url);
+  } catch (err) {
+    dialog.showErrorBox("Privai failed to start", String(err));
+  }
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target);
     return { action: "deny" };
   });
+  installContextMenu(mainWindow);
 }
 
 async function chooseWorkspace() {
@@ -355,8 +494,24 @@ async function chooseWorkspace() {
     properties: ["openDirectory"],
   });
   if (result.canceled || !result.filePaths[0]) return;
-  writeWorkspaceRoot(result.filePaths[0]);
-  restartBackend();
+  return setWorkspace(result.filePaths[0]);
+}
+
+async function createWorkspace(_event, rawName) {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose Parent Folder",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) return;
+  const parent = result.filePaths[0];
+  const target = path.join(parent, cleanWorkspaceName(rawName));
+  if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) {
+    throw new Error("A file already exists with that workspace name");
+  }
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(target, { recursive: false });
+  }
+  return setWorkspace(target);
 }
 
 function restartBackend() {
@@ -374,8 +529,41 @@ function installMenu() {
       label: "File",
       submenu: [
         { label: "Open Workspace...", click: chooseWorkspace },
+        {
+          label: "Create Workspace...",
+          click: async () => {
+            try {
+              await createWorkspace(null, "privai-project");
+            } catch (err) {
+              dialog.showErrorBox("Could not create workspace", String(err));
+            }
+          },
+        },
         { type: "separator" },
         { role: "quit" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { type: "separator" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "Privai",
+      submenu: [
+        { label: "Open Logs", click: openLogs },
+        { label: "Open App Data Folder", click: openAppData },
+        { label: "Reveal Environment File", click: revealEnvFile },
       ],
     },
     {
@@ -393,7 +581,44 @@ function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function installContextMenu(win) {
+  win.webContents.on("context-menu", (_event, params) => {
+    const template = [];
+    if (params.isEditable) {
+      template.push(
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { type: "separator" },
+        { role: "selectAll" },
+      );
+    } else if (params.selectionText) {
+      template.push(
+        { role: "copy" },
+        { type: "separator" },
+        { role: "selectAll" },
+      );
+    }
+    if (template.length) {
+      Menu.buildFromTemplate(template).popup({ window: win });
+    }
+  });
+}
+
 app.whenReady().then(() => {
+  ipcMain.handle("privai:choose-workspace", chooseWorkspace);
+  ipcMain.handle("privai:create-workspace", createWorkspace);
+  ipcMain.handle("privai:set-workspace", (_event, workspaceRoot) =>
+    setWorkspace(workspaceRoot),
+  );
+  ipcMain.handle("privai:open-logs", openLogs);
+  ipcMain.handle("privai:open-app-data", openAppData);
+  ipcMain.handle("privai:reveal-env-file", revealEnvFile);
   installMenu();
   createWindow();
 });

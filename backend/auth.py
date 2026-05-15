@@ -150,6 +150,14 @@ async def require_owner(caller: Caller = Depends(verify_id_token)) -> Caller:
             detail="device not paired — call POST /pair with the pairing code",
         )
     if caller.uid != owner:
+        if settings.owner_takeover_enabled:
+            log.warning(
+                "reassigning local device owner from uid=%s to uid=%s",
+                owner,
+                caller.uid,
+            )
+            database.reassign_owner(caller.uid)
+            return caller
         raise HTTPException(
             status_code=403,
             detail="this account is not the device owner",
@@ -174,4 +182,7 @@ def _print_pairing_code_once() -> None:
 def claim_pairing(code: str, caller: Caller) -> bool:
     if not settings.pairing_code or code.strip() != settings.pairing_code:
         return False
+    if settings.owner_takeover_enabled:
+        database.reassign_owner(caller.uid)
+        return True
     return database.claim_owner(caller.uid)

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
     owner_uid   TEXT NOT NULL,
     title       TEXT NOT NULL,
+    space       TEXT NOT NULL DEFAULT 'general',
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL
 );
@@ -88,6 +89,39 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_uid, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(session_id);
 
+CREATE TABLE IF NOT EXISTS learning_materials (
+    id            TEXT PRIMARY KEY,
+    owner_uid     TEXT NOT NULL,
+    session_id    TEXT NOT NULL,
+    attachment_id TEXT,
+    title         TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    mime          TEXT NOT NULL,
+    size          INTEGER NOT NULL,
+    status        TEXT NOT NULL,
+    summary       TEXT,
+    text_excerpt  TEXT,
+    created_at    REAL NOT NULL,
+    updated_at    REAL NOT NULL,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_learning_materials_session
+    ON learning_materials(owner_uid, session_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS business_actions (
+    id          TEXT PRIMARY KEY,
+    owner_uid   TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    result_json  TEXT,
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_business_actions_owner_status
+    ON business_actions(owner_uid, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
     v TEXT
@@ -98,10 +132,50 @@ CREATE TABLE IF NOT EXISTS kv (
 def init() -> None:
     with _conn() as c:
         c.executescript(_BASE_SCHEMA)
+        _safe_alter(c, "ALTER TABLE sessions ADD COLUMN space TEXT NOT NULL DEFAULT 'general'")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_owner_space_updated "
+            "ON sessions(owner_uid, space, updated_at DESC)"
+        )
         _safe_alter(c, "ALTER TABLE messages ADD COLUMN artifact_json TEXT")
         _safe_alter(
             c,
             "ALTER TABLE messages ADD COLUMN attachments_json TEXT",
+        )
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS learning_materials (
+                id            TEXT PRIMARY KEY,
+                owner_uid     TEXT NOT NULL,
+                session_id    TEXT NOT NULL,
+                attachment_id TEXT,
+                title         TEXT NOT NULL,
+                kind          TEXT NOT NULL,
+                mime          TEXT NOT NULL,
+                size          INTEGER NOT NULL,
+                status        TEXT NOT NULL,
+                summary       TEXT,
+                text_excerpt  TEXT,
+                created_at    REAL NOT NULL,
+                updated_at    REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_materials_session
+                ON learning_materials(owner_uid, session_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS business_actions (
+                id          TEXT PRIMARY KEY,
+                owner_uid   TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json  TEXT,
+                created_at  REAL NOT NULL,
+                updated_at  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_business_actions_owner_status
+                ON business_actions(owner_uid, status, updated_at DESC);
+            """
         )
 
 
@@ -125,6 +199,23 @@ def claim_owner(uid: str) -> bool:
         return cur.rowcount == 1
 
 
+def reassign_owner(uid: str) -> None:
+    """Move this local device and existing local data to a new Firebase UID."""
+    old_uid = get_owner_uid()
+    now = time.time()
+    with _conn() as c:
+        c.execute(
+            "UPDATE pairing SET owner_uid = ?, paired_at = ? WHERE singleton = 1",
+            (uid, now),
+        )
+        if old_uid and old_uid != uid:
+            c.execute("UPDATE sessions SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE messages SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE attachments SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE learning_materials SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE business_actions SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+
+
 def reset_owner() -> None:
     with _conn() as c:
         c.execute("UPDATE pairing SET owner_uid = NULL, paired_at = NULL WHERE singleton = 1")
@@ -132,23 +223,38 @@ def reset_owner() -> None:
 
 # ---- sessions ------------------------------------------------------------
 
+_VALID_SPACES = {"general", "business", "coding", "learning"}
 
-def create_session(owner_uid: str, title: str) -> dict:
+
+def _normalize_space(space: str | None) -> str:
+    value = (space or "general").strip().lower()
+    return value if value in _VALID_SPACES else "general"
+
+
+def create_session(owner_uid: str, title: str, space: str | None = "general") -> dict:
     sid = str(uuid.uuid4())
     now = time.time()
+    clean_title = title.strip()[:120] or "New chat"
+    clean_space = _normalize_space(space)
     with _conn() as c:
         c.execute(
-            "INSERT INTO sessions(id, owner_uid, title, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (sid, owner_uid, title.strip()[:120] or "New chat", now, now),
+            "INSERT INTO sessions(id, owner_uid, title, space, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, owner_uid, clean_title, clean_space, now, now),
         )
-    return {"id": sid, "title": title, "createdAt": now, "updatedAt": now}
+    return {
+        "id": sid,
+        "title": clean_title,
+        "space": clean_space,
+        "createdAt": now,
+        "updatedAt": now,
+    }
 
 
 def list_sessions(owner_uid: str, limit: int = 100) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, title, created_at, updated_at FROM sessions "
+            "SELECT id, title, space, created_at, updated_at FROM sessions "
             "WHERE owner_uid = ? ORDER BY updated_at DESC LIMIT ?",
             (owner_uid, limit),
         ).fetchall()
@@ -156,6 +262,7 @@ def list_sessions(owner_uid: str, limit: int = 100) -> list[dict]:
         {
             "id": r["id"],
             "title": r["title"],
+            "space": r["space"],
             "createdAt": r["created_at"],
             "updatedAt": r["updated_at"],
         }
@@ -166,7 +273,7 @@ def list_sessions(owner_uid: str, limit: int = 100) -> list[dict]:
 def get_session(owner_uid: str, sid: str) -> dict | None:
     with _conn() as c:
         row = c.execute(
-            "SELECT id, title, created_at, updated_at FROM sessions "
+            "SELECT id, title, space, created_at, updated_at FROM sessions "
             "WHERE id = ? AND owner_uid = ?",
             (sid, owner_uid),
         ).fetchone()
@@ -175,6 +282,7 @@ def get_session(owner_uid: str, sid: str) -> dict | None:
     return {
         "id": row["id"],
         "title": row["title"],
+        "space": row["space"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -393,6 +501,227 @@ def delete_attachment(owner_uid: str, aid: str) -> bool:
             (owner_uid, aid),
         )
         return cur.rowcount == 1
+
+
+# ---- learning notebooks -------------------------------------------------
+
+
+def insert_learning_material(
+    owner_uid: str,
+    session_id: str,
+    title: str,
+    kind: str,
+    mime: str,
+    size: int,
+    status: str,
+    summary: str | None,
+    text_excerpt: str | None,
+    attachment_id: str | None = None,
+) -> dict:
+    mid = str(uuid.uuid4())
+    now = time.time()
+    clean_title = title.strip()[:160] or "Untitled material"
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO learning_materials("
+            "id, owner_uid, session_id, attachment_id, title, kind, mime, "
+            "size, status, summary, text_excerpt, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                mid,
+                owner_uid,
+                session_id,
+                attachment_id,
+                clean_title,
+                kind,
+                mime,
+                size,
+                status,
+                summary,
+                text_excerpt,
+                now,
+                now,
+            ),
+        )
+        c.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ? AND owner_uid = ?",
+            (now, session_id, owner_uid),
+        )
+    return {
+        "id": mid,
+        "attachmentId": attachment_id,
+        "title": clean_title,
+        "kind": kind,
+        "mime": mime,
+        "size": size,
+        "status": status,
+        "summary": summary or "",
+        "hasText": bool(text_excerpt),
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def list_learning_materials(
+    owner_uid: str,
+    session_id: str,
+    include_text: bool = False,
+) -> list[dict]:
+    columns = (
+        "id, attachment_id, title, kind, mime, size, status, summary, "
+        "text_excerpt, created_at, updated_at"
+    )
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT {columns} FROM learning_materials "
+            "WHERE owner_uid = ? AND session_id = ? "
+            "ORDER BY created_at ASC",
+            (owner_uid, session_id),
+        ).fetchall()
+    return [_row_to_learning_material(row, include_text=include_text) for row in rows]
+
+
+def delete_learning_material(owner_uid: str, session_id: str, mid: str) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            "DELETE FROM learning_materials "
+            "WHERE owner_uid = ? AND session_id = ? AND id = ?",
+            (owner_uid, session_id, mid),
+        )
+        if cur.rowcount:
+            c.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ? AND owner_uid = ?",
+                (time.time(), session_id, owner_uid),
+            )
+        return cur.rowcount == 1
+
+
+def _row_to_learning_material(row: sqlite3.Row, include_text: bool = False) -> dict:
+    item = {
+        "id": row["id"],
+        "attachmentId": row["attachment_id"],
+        "title": row["title"],
+        "kind": row["kind"],
+        "mime": row["mime"],
+        "size": row["size"],
+        "status": row["status"],
+        "summary": row["summary"] or "",
+        "hasText": bool(row["text_excerpt"]),
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+    if include_text:
+        item["textExcerpt"] = row["text_excerpt"] or ""
+    return item
+
+
+# ---- business actions ---------------------------------------------------
+
+
+def create_business_action(
+    owner_uid: str,
+    kind: str,
+    title: str,
+    payload: dict,
+) -> dict:
+    aid = str(uuid.uuid4())
+    now = time.time()
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO business_actions("
+            "id, owner_uid, kind, status, title, payload_json, result_json, "
+            "created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                aid,
+                owner_uid,
+                kind,
+                "pending",
+                title.strip()[:180] or kind,
+                json.dumps(payload),
+                None,
+                now,
+                now,
+            ),
+        )
+    return {
+        "id": aid,
+        "kind": kind,
+        "status": "pending",
+        "title": title.strip()[:180] or kind,
+        "payload": payload,
+        "result": None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def list_business_actions(
+    owner_uid: str,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    with _conn() as c:
+        if status:
+            rows = c.execute(
+                "SELECT * FROM business_actions "
+                "WHERE owner_uid = ? AND status = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (owner_uid, status, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM business_actions WHERE owner_uid = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (owner_uid, limit),
+            ).fetchall()
+    return [_row_to_business_action(row) for row in rows]
+
+
+def get_business_action(owner_uid: str, aid: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM business_actions WHERE owner_uid = ? AND id = ?",
+            (owner_uid, aid),
+        ).fetchone()
+    return _row_to_business_action(row) if row else None
+
+
+def update_business_action(
+    owner_uid: str,
+    aid: str,
+    status: str,
+    result: dict | None = None,
+) -> dict | None:
+    now = time.time()
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE business_actions SET status = ?, result_json = ?, updated_at = ? "
+            "WHERE owner_uid = ? AND id = ?",
+            (
+                status,
+                json.dumps(result) if result is not None else None,
+                now,
+                owner_uid,
+                aid,
+            ),
+        )
+        if cur.rowcount != 1:
+            return None
+    return get_business_action(owner_uid, aid)
+
+
+def _row_to_business_action(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "title": row["title"],
+        "payload": _json(row["payload_json"]) or {},
+        "result": _json(row["result_json"]) or None,
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
 
 
 # ---- runtime kv settings ------------------------------------------------
