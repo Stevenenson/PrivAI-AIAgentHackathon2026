@@ -9,6 +9,7 @@ import {
   Play,
   ShieldAlert,
   Sparkles,
+  User,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -20,9 +21,10 @@ interface BubbleProps {
   msg: ChatMessage;
   streaming?: boolean;
   onOpenArtifact?: (a: Artifact) => void;
+  onOpenFile?: (path: string) => void;
 }
 
-export function MessageBubble({ msg, streaming, onOpenArtifact }: BubbleProps) {
+export function MessageBubble({ msg, streaming, onOpenArtifact, onOpenFile }: BubbleProps) {
   const isUser = msg.role === "user";
   const [copied, setCopied] = useState(false);
   const displayContent =
@@ -30,51 +32,49 @@ export function MessageBubble({ msg, streaming, onOpenArtifact }: BubbleProps) {
     (!isUser && !streaming
       ? "The model returned no final answer. Please retry this message."
       : "");
+
   return (
-    <div
-      className={cn(
-        "msg-enter w-full flex",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
-      <div className={cn("group", isUser ? "max-w-[78%]" : "max-w-[88%] md:max-w-[760px]")}>
-        {!isUser ? (
-          <div className="flex items-center gap-2 mb-1.5 text-xs text-muted">
-            <span className="h-5 w-5 rounded-md bg-accent text-white grid place-items-center">
-              <Sparkles className="h-3 w-3" />
-            </span>
-            assistant
-          </div>
-        ) : null}
+    <article className="msg-enter group flex w-full gap-3 px-1">
+      <div className="shrink-0 pt-0.5">
+        <span
+          className={cn(
+            "grid h-6 w-6 place-items-center rounded-md text-[11px] font-semibold",
+            isUser
+              ? "bg-accent text-white"
+              : "bg-accent-tint text-accent",
+          )}
+          aria-hidden
+        >
+          {isUser ? <User className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+        </span>
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <header className="flex items-center gap-2 text-[11px] text-muted">
+          <span className="font-semibold uppercase tracking-wide text-ink-2">
+            {isUser ? "You" : "Privai"}
+          </span>
+          {streaming ? (
+            <span className="text-accent">streaming…</span>
+          ) : null}
+        </header>
 
         <div
           className={cn(
-            "rounded-[14px] px-4 py-3 text-[15px] leading-7 break-words prose",
-            isUser
-              ? "bg-accent text-white rounded-br-[6px] whitespace-pre-wrap"
-              : "bg-surface border border-line text-ink rounded-bl-[6px] shadow-[0_1px_2px_rgba(0,0,0,0.03)]",
+            "markdown-body mt-1 text-[15px] leading-7 text-ink break-words",
+            isUser && "whitespace-pre-wrap",
           )}
         >
           {isUser ? (
             <span className={streaming ? "caret" : ""}>{displayContent}</span>
           ) : (
-            <MarkdownText text={displayContent} streaming={streaming} />
+            <MarkdownText
+              text={displayContent}
+              streaming={streaming}
+              onOpenFile={onOpenFile}
+            />
           )}
         </div>
-
-        {!isUser && displayContent ? (
-          <div className="mt-1.5 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-            <button
-              type="button"
-              onClick={() => void copyText(displayContent, setCopied)}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted hover:text-ink hover:bg-surface-2"
-              title="Copy response"
-            >
-              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              {copied ? "copied" : "copy"}
-            </button>
-          </div>
-        ) : null}
 
         {(msg.usedSearch || (msg.redactions && msg.redactions.length)) && !isUser ? (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -96,27 +96,47 @@ export function MessageBubble({ msg, streaming, onOpenArtifact }: BubbleProps) {
         ) : null}
 
         {msg.sources && msg.sources.length ? <Sources sources={msg.sources} /> : null}
+
+        {!isUser && displayContent ? (
+          <div className="mt-2 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              onClick={() => void copyText(displayContent, setCopied)}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted hover:text-ink hover:bg-surface-2"
+              title="Copy response"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? "copied" : "copy"}
+            </button>
+          </div>
+        ) : null}
       </div>
-    </div>
+    </article>
   );
 }
 
 function MarkdownText({
   text,
   streaming,
+  onOpenFile,
 }: {
   text: string;
   streaming?: boolean;
+  onOpenFile?: (path: string) => void;
 }) {
   return (
-    <div className="markdown-body">
-      {renderBlocks(text)}
+    <div>
+      {renderBlocks(text, { onOpenFile })}
       {streaming ? <span className="caret" aria-hidden="true" /> : null}
     </div>
   );
 }
 
-function renderBlocks(text: string) {
+interface RenderOpts {
+  onOpenFile?: (path: string) => void;
+}
+
+function renderBlocks(text: string, opts: RenderOpts = {}) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let paragraph: string[] = [];
@@ -129,15 +149,15 @@ function renderBlocks(text: string) {
         blocks.push(
           <section key={`section-${blocks.length}`} className="answer-section">
             <div className="answer-section-title">
-              {renderInline(titled.title, `section-title-${blocks.length}`)}
+              {renderInline(titled.title, `section-title-${blocks.length}`, opts)}
             </div>
-            <p>{renderInline(titled.body, `section-body-${blocks.length}`)}</p>
+            <p>{renderInline(titled.body, `section-body-${blocks.length}`, opts)}</p>
           </section>,
         );
       } else {
         blocks.push(
           <p key={`p-${blocks.length}`}>
-            {renderInline(body, `p-${blocks.length}`)}
+            {renderInline(body, `p-${blocks.length}`, opts)}
           </p>,
         );
       }
@@ -160,7 +180,7 @@ function renderBlocks(text: string) {
       const Tag = heading[1].length <= 2 ? "h3" : "h4";
       blocks.push(
         <Tag key={`h-${blocks.length}`}>
-          {renderInline(heading[2], `h-${blocks.length}`)}
+          {renderInline(heading[2], `h-${blocks.length}`, opts)}
         </Tag>,
       );
       continue;
@@ -168,6 +188,7 @@ function renderBlocks(text: string) {
 
     if (trimmed.startsWith("```")) {
       flushParagraph();
+      const lang = trimmed.slice(3).trim();
       const code: string[] = [];
       i += 1;
       while (i < lines.length && !lines[i].trim().startsWith("```")) {
@@ -175,9 +196,12 @@ function renderBlocks(text: string) {
         i += 1;
       }
       blocks.push(
-        <pre key={`code-${blocks.length}`}>
-          <code>{code.join("\n")}</code>
-        </pre>,
+        <CodeBlock
+          key={`code-${blocks.length}`}
+          lang={lang || undefined}
+          code={code.join("\n")}
+          onOpenFile={opts.onOpenFile}
+        />,
       );
       continue;
     }
@@ -195,7 +219,7 @@ function renderBlocks(text: string) {
       blocks.push(
         <ul key={`ul-${blocks.length}`}>
           {items.map((item, index) => (
-            <li key={index}>{renderInline(item, `ul-${blocks.length}-${index}`)}</li>
+            <li key={index}>{renderInline(item, `ul-${blocks.length}-${index}`, opts)}</li>
           ))}
         </ul>,
       );
@@ -215,7 +239,7 @@ function renderBlocks(text: string) {
       blocks.push(
         <ol key={`ol-${blocks.length}`}>
           {items.map((item, index) => (
-            <li key={index}>{renderInline(item, `ol-${blocks.length}-${index}`)}</li>
+            <li key={index}>{renderInline(item, `ol-${blocks.length}-${index}`, opts)}</li>
           ))}
         </ol>,
       );
@@ -240,7 +264,11 @@ function titledParagraph(text: string): { title: string; body: string } | null {
   return { title, body: plain[2] };
 }
 
-function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
+function renderInline(
+  text: string,
+  keyPrefix: string,
+  opts: RenderOpts = {},
+): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let i = 0;
   let textKey = 0;
@@ -272,7 +300,20 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
     if (text[i] === "`") {
       const end = text.indexOf("`", i + 1);
       if (end > i + 1) {
-        nodes.push(<code key={`${keyPrefix}-code-${textKey++}`}>{text.slice(i + 1, end)}</code>);
+        const inner = text.slice(i + 1, end);
+        if (isFilePath(inner) && opts.onOpenFile) {
+          nodes.push(
+            <FileChip
+              key={`${keyPrefix}-file-${textKey++}`}
+              path={inner}
+              onOpenFile={opts.onOpenFile}
+            />,
+          );
+        } else {
+          nodes.push(
+            <code key={`${keyPrefix}-code-${textKey++}`}>{inner}</code>,
+          );
+        }
         i = end + 1;
         continue;
       }
@@ -464,6 +505,134 @@ function formatSize(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+const FILE_PATH_RE =
+  /^(?:\.{1,2}\/)?[\w@./-]+\.(?:tsx?|jsx?|css|scss|html|md|mdx|json|ya?ml|toml|py|rs|go|java|kt|swift|sh|bash|zsh|sql|prisma|svelte|vue|astro|env|cfg|ini|conf)$|^(?:src|app|components|backend|web|public|tests?|spec)\//;
+
+function isFilePath(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 160) return false;
+  if (/\s/.test(trimmed) && !trimmed.includes("/")) return false;
+  return FILE_PATH_RE.test(trimmed);
+}
+
+function FileChip({
+  path,
+  onOpenFile,
+}: {
+  path: string;
+  onOpenFile: (path: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenFile(path)}
+      className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[12px] text-ink hover:border-accent hover:text-accent"
+      title={`Open ${path} in editor`}
+    >
+      <FileText className="h-3 w-3" />
+      {path}
+    </button>
+  );
+}
+
+function CodeBlock({
+  lang,
+  code,
+  onOpenFile,
+}: {
+  lang?: string;
+  code: string;
+  onOpenFile?: (path: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const firstLine = code.split("\n", 1)[0] ?? "";
+  const detectedPath =
+    isFilePath(firstLine.trim()) ? firstLine.trim() : null;
+  const language = (lang || "").toLowerCase();
+  return (
+    <div className="code-block group">
+      <header className="code-block-head">
+        <span className="text-[10px] uppercase tracking-wider text-muted">
+          {language || "code"}
+        </span>
+        <div className="flex items-center gap-1">
+          {detectedPath && onOpenFile ? (
+            <button
+              type="button"
+              onClick={() => onOpenFile(detectedPath)}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted hover:bg-surface-2 hover:text-ink"
+              title={`Open ${detectedPath} in editor`}
+            >
+              <FileText className="h-3 w-3" />
+              {detectedPath}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void copyText(code, setCopied)}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted hover:bg-surface-2 hover:text-ink"
+            title="Copy code"
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copied ? "copied" : "copy"}
+          </button>
+        </div>
+      </header>
+      <pre className="code-block-body">
+        <code dangerouslySetInnerHTML={{ __html: highlight(code, language) }} />
+      </pre>
+    </div>
+  );
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+const KEYWORDS: Record<string, string[]> = {
+  js: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "import", "from", "export", "default", "class", "new", "await", "async", "of", "in", "typeof", "true", "false", "null", "undefined", "this", "as", "interface", "type", "extends", "implements", "switch", "case", "break", "continue", "try", "catch", "finally", "throw"],
+  ts: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "import", "from", "export", "default", "class", "new", "await", "async", "of", "in", "typeof", "true", "false", "null", "undefined", "this", "as", "interface", "type", "extends", "implements", "switch", "case", "break", "continue", "try", "catch", "finally", "throw", "readonly", "public", "private", "protected", "enum"],
+  py: ["def", "class", "import", "from", "return", "if", "elif", "else", "for", "while", "in", "not", "and", "or", "is", "True", "False", "None", "with", "as", "try", "except", "finally", "raise", "pass", "lambda", "yield", "async", "await", "global", "nonlocal"],
+  sh: ["if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while", "case", "esac", "function", "return", "exit", "echo", "export", "source"],
+  rust: ["fn", "let", "mut", "const", "if", "else", "for", "while", "loop", "match", "return", "use", "mod", "pub", "struct", "enum", "impl", "trait", "self", "Self", "as", "in", "true", "false"],
+};
+
+function languageGroup(lang: string): keyof typeof KEYWORDS | null {
+  if (["js", "javascript", "jsx", "mjs", "cjs"].includes(lang)) return "js";
+  if (["ts", "typescript", "tsx"].includes(lang)) return "ts";
+  if (["py", "python"].includes(lang)) return "py";
+  if (["sh", "bash", "zsh", "shell"].includes(lang)) return "sh";
+  if (["rs", "rust"].includes(lang)) return "rust";
+  return null;
+}
+
+function highlight(code: string, lang: string): string {
+  const group = languageGroup(lang);
+  if (!group) return escapeHtml(code);
+  const keywords = new Set(KEYWORDS[group]);
+  const tokens: string[] = [];
+  const re = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$]*|[\s\S])/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(code)) !== null) {
+    const token = match[0];
+    if (/^["'`]/.test(token)) {
+      tokens.push(`<span class="hl-str">${escapeHtml(token)}</span>`);
+    } else if (/^(?:\/\/|#|\/\*)/.test(token)) {
+      tokens.push(`<span class="hl-com">${escapeHtml(token)}</span>`);
+    } else if (/^\d/.test(token)) {
+      tokens.push(`<span class="hl-num">${escapeHtml(token)}</span>`);
+    } else if (/^[A-Za-z_$]/.test(token) && keywords.has(token)) {
+      tokens.push(`<span class="hl-kw">${escapeHtml(token)}</span>`);
+    } else {
+      tokens.push(escapeHtml(token));
+    }
+  }
+  return tokens.join("");
 }
 
 function Sources({ sources }: { sources: SearchSource[] }) {

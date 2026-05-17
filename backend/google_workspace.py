@@ -35,6 +35,36 @@ SCOPES = (
 GOOGLE_WORKSPACE_TOOLS = [
     {
         "type": "function",
+        "name": "scan_recent_emails",
+        "description": (
+            "Scan recent Gmail messages in read-only mode and identify business "
+            "items such as meeting requests, follow-ups, deadlines, invoices, "
+            "client questions, and tasks. Use this when the user asks to check "
+            "recent email or find things that need action."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "How many recent days to scan, from 1 to 60.",
+                    "minimum": 1,
+                    "maximum": 60,
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum messages to inspect, from 1 to 50.",
+                    "minimum": 1,
+                    "maximum": 50,
+                },
+            },
+            "required": ["days", "max_results"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "search_email",
         "description": (
             "Search the user's connected Gmail mailbox in read-only mode. Use "
@@ -243,7 +273,13 @@ def disconnect(owner_uid: str) -> dict[str, Any]:
 
 async def execute_tool(owner_uid: str, name: str, args: dict[str, Any]) -> str:
     try:
-        if name == "search_email":
+        if name == "scan_recent_emails":
+            result = await scan_recent_email_insights(
+                owner_uid,
+                int(args.get("days") or 14),
+                int(args.get("max_results") or 50),
+            )
+        elif name == "search_email":
             result = await search_email(
                 owner_uid,
                 str(args.get("query") or ""),
@@ -290,6 +326,40 @@ async def search_email(
     return {"query": query, "messages": details}
 
 
+async def scan_recent_email_insights(
+    owner_uid: str,
+    days: int = 14,
+    max_results: int = 50,
+) -> dict[str, Any]:
+    days = max(1, min(days, 60))
+    max_results = max(1, min(max_results, 50))
+    query = f"newer_than:{days}d -category:promotions -category:social"
+    access_token = await _access_token(owner_uid)
+    async with httpx.AsyncClient(timeout=30) as client:
+        listed = await client.get(
+            f"{GMAIL_BASE_URL}/users/me/messages",
+            headers=_auth_headers(access_token),
+            params={"q": query, "maxResults": max_results},
+        )
+        if listed.status_code >= 400:
+            raise RuntimeError(_google_error(listed))
+        messages = listed.json().get("messages") or []
+        details = await _gather_message_metadata(
+            client,
+            access_token,
+            messages,
+            full=True,
+        )
+    insights = _business_email_insights(details)
+    return {
+        "query": query,
+        "days": days,
+        "scanned": len(details),
+        "insights": insights,
+        "generatedAt": time.time(),
+    }
+
+
 async def read_email_thread(owner_uid: str, thread_id: str) -> dict[str, Any]:
     if not thread_id.strip():
         raise RuntimeError("thread_id is required")
@@ -309,6 +379,76 @@ async def read_email_thread(owner_uid: str, thread_id: str) -> dict[str, Any]:
         "threadId": data.get("id"),
         "historyId": data.get("historyId"),
         "messages": [_format_gmail_message(item) for item in data.get("messages") or []],
+    }
+
+
+async def list_calendar_events(
+    owner_uid: str,
+    time_min: str | None = None,
+    time_max: str | None = None,
+    calendar_id: str = "primary",
+    max_results: int = 50,
+) -> dict[str, Any]:
+    access_token = await _access_token(owner_uid)
+    now = datetime.now(tz=timezone.utc)
+    if time_min:
+        start_dt = _parse_dt(time_min)
+    else:
+        start_dt = now
+    if time_max:
+        end_dt = _parse_dt(time_max)
+    else:
+        end_dt = start_dt + timedelta(days=30)
+    if end_dt <= start_dt:
+        raise RuntimeError("time_max must be after time_min")
+    params = {
+        "timeMin": _iso_z(start_dt),
+        "timeMax": _iso_z(end_dt),
+        "singleEvents": "true",
+        "orderBy": "startTime",
+        "maxResults": str(max(1, min(int(max_results), 250))),
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            f"{CALENDAR_BASE_URL}/calendars/{calendar_id or 'primary'}/events",
+            headers=_auth_headers(access_token),
+            params=params,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(_google_error(response))
+    body = response.json()
+    items = body.get("items") or []
+    events = []
+    for item in items:
+        if item.get("status") == "cancelled":
+            continue
+        start = item.get("start") or {}
+        end = item.get("end") or {}
+        events.append({
+            "id": item.get("id"),
+            "summary": item.get("summary") or "(no title)",
+            "description": item.get("description") or "",
+            "location": item.get("location") or "",
+            "htmlLink": item.get("htmlLink") or "",
+            "start": start.get("dateTime") or start.get("date") or "",
+            "end": end.get("dateTime") or end.get("date") or "",
+            "allDay": bool(start.get("date") and not start.get("dateTime")),
+            "attendees": [
+                {
+                    "email": att.get("email") or "",
+                    "displayName": att.get("displayName") or "",
+                    "responseStatus": att.get("responseStatus") or "",
+                }
+                for att in (item.get("attendees") or [])
+            ],
+            "organizer": (item.get("organizer") or {}).get("email") or "",
+            "hangoutLink": item.get("hangoutLink") or "",
+        })
+    return {
+        "calendarId": calendar_id or "primary",
+        "timeMin": params["timeMin"],
+        "timeMax": params["timeMax"],
+        "events": events,
     }
 
 
@@ -425,6 +565,7 @@ async def _gather_message_metadata(
     client: httpx.AsyncClient,
     access_token: str,
     messages: list[dict[str, Any]],
+    full: bool = False,
 ) -> list[dict[str, Any]]:
     details: list[dict[str, Any]] = []
     for item in messages:
@@ -434,10 +575,14 @@ async def _gather_message_metadata(
         response = await client.get(
             f"{GMAIL_BASE_URL}/users/me/messages/{mid}",
             headers=_auth_headers(access_token),
-            params={
-                "format": "metadata",
-                "metadataHeaders": ["From", "To", "Subject", "Date"],
-            },
+            params=(
+                {"format": "full"}
+                if full
+                else {
+                    "format": "metadata",
+                    "metadataHeaders": ["From", "To", "Subject", "Date"],
+                }
+            ),
         )
         if response.status_code >= 400:
             continue
@@ -461,6 +606,162 @@ def _format_gmail_message(item: dict[str, Any]) -> dict[str, Any]:
         "snippet": item.get("snippet") or "",
         "text": _message_text(item.get("payload") or {})[:6000],
     }
+
+
+_INSIGHT_RULES = (
+    (
+        "meeting_request",
+        (
+            "meet", "meeting", "call", "schedule", "calendar", "availability",
+            "available", "book a time", "zoom", "teams", "discuss",
+            "intalnire", "întâlnire", "sedinta", "ședință", "program",
+            "discutam", "discutăm",
+        ),
+        "Schedule meeting",
+    ),
+    (
+        "follow_up",
+        (
+            "follow up", "following up", "checking in", "any update", "update",
+            "reminder", "waiting", "ping", "raspuns", "răspuns",
+        ),
+        "Reply or follow up",
+    ),
+    (
+        "deadline",
+        (
+            "deadline", "due", "by friday", "by monday", "tomorrow", "today",
+            "urgent", "asap", "until", "before", "maine", "mâine", "azi",
+        ),
+        "Review deadline",
+    ),
+    (
+        "invoice",
+        (
+            "invoice", "payment", "paid", "quote", "proposal", "contract",
+            "receipt", "factura", "factură", "plata", "plată", "oferta",
+        ),
+        "Review finance item",
+    ),
+    (
+        "task",
+        (
+            "please send", "could you", "can you", "need you to", "please review",
+            "approve", "confirm", "complete", "trimite", "aproba", "confirm",
+        ),
+        "Handle task",
+    ),
+    (
+        "client_question",
+        (
+            "?", "question", "wondering", "can we", "do you", "how much",
+            "when can", "where can", "întrebare", "intrebare",
+        ),
+        "Answer question",
+    ),
+)
+
+
+def _business_email_insights(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    insights: list[dict[str, Any]] = []
+    seen_threads: set[str] = set()
+    for message in messages:
+        thread_id = str(message.get("threadId") or "")
+        if thread_id and thread_id in seen_threads:
+            continue
+        haystack = " ".join(
+            str(message.get(key) or "")
+            for key in ("subject", "from", "snippet", "text")
+        ).lower()
+        matches: list[tuple[str, str, int]] = []
+        for kind, keywords, action in _INSIGHT_RULES:
+            score = sum(1 for keyword in keywords if keyword in haystack)
+            if score:
+                matches.append((kind, action, score))
+        if not matches:
+            continue
+        matches.sort(key=lambda item: item[2], reverse=True)
+        kind, action, score = matches[0]
+        if thread_id:
+            seen_threads.add(thread_id)
+        from_name, from_email = _parse_from(str(message.get("from") or ""))
+        subject = str(message.get("subject") or "(no subject)")
+        snippet = str(message.get("snippet") or message.get("text") or "").strip()
+        title = _insight_title(kind, from_name or from_email, subject)
+        confidence = min(0.95, 0.45 + score * 0.15)
+        insights.append({
+            "id": str(message.get("id") or thread_id or len(insights)),
+            "kind": kind,
+            "title": title,
+            "summary": snippet[:360],
+            "suggestedAction": action,
+            "confidence": round(confidence, 2),
+            "messageId": message.get("id"),
+            "threadId": thread_id,
+            "subject": subject,
+            "from": message.get("from") or "",
+            "fromName": from_name,
+            "fromEmail": from_email,
+            "date": message.get("date") or "",
+            "attendees": [from_email] if from_email else [],
+            "durationMinutes": 30 if kind == "meeting_request" else None,
+            "proposedTitle": (
+                f"Meeting with {from_name or from_email or 'client'}"
+                if kind == "meeting_request"
+                else subject
+            ),
+            "proposedDescription": _proposed_description(message, kind),
+        })
+        if len(insights) >= 12:
+            break
+    return insights
+
+
+def _insight_title(kind: str, from_label: str, subject: str) -> str:
+    actor = from_label or "sender"
+    if kind == "meeting_request":
+        return f"Meeting request from {actor}"
+    if kind == "follow_up":
+        return f"Follow-up needed: {subject}"
+    if kind == "deadline":
+        return f"Possible deadline: {subject}"
+    if kind == "invoice":
+        return f"Finance item: {subject}"
+    if kind == "task":
+        return f"Task request from {actor}"
+    return f"Client question: {subject}"
+
+
+def _parse_from(raw: str) -> tuple[str, str]:
+    match = re.search(r"(?P<name>.*?)<(?P<email>[^>]+)>", raw)
+    if match:
+        name = match.group("name").strip().strip('"')
+        email = match.group("email").strip()
+        return name, email
+    email_match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", raw)
+    email = email_match.group(0) if email_match else ""
+    name = raw.replace(email, "").strip().strip('"<>')
+    return name, email
+
+
+def _proposed_description(message: dict[str, Any], kind: str) -> str:
+    subject = str(message.get("subject") or "")
+    sender = str(message.get("from") or "")
+    snippet = str(message.get("snippet") or message.get("text") or "").strip()
+    label = {
+        "meeting_request": "Meeting request detected from recent email.",
+        "follow_up": "Follow-up detected from recent email.",
+        "deadline": "Possible deadline detected from recent email.",
+        "invoice": "Finance item detected from recent email.",
+        "task": "Task request detected from recent email.",
+        "client_question": "Client question detected from recent email.",
+    }.get(kind, "Business item detected from recent email.")
+    return (
+        f"{label}\n\n"
+        f"From: {sender}\n"
+        f"Subject: {subject}\n\n"
+        f"Email preview:\n{snippet[:1000]}"
+    ).strip()
 
 
 def _message_text(payload: dict[str, Any]) -> str:

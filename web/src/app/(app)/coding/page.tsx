@@ -5,6 +5,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Code2,
+  ExternalLink,
   FileCode2,
   Files,
   FolderOpen,
@@ -12,6 +13,7 @@ import {
   GitBranch,
   History,
   ListChecks,
+  MonitorPlay,
   PanelBottomClose,
   PanelBottomOpen,
   PanelRightClose,
@@ -20,6 +22,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  StopCircle,
   SquareTerminal,
   XCircle,
 } from "lucide-react";
@@ -50,6 +53,7 @@ import {
 import type {
   AgentToolEvent,
   ChatMode,
+  PreviewInfo,
   WorkspaceCheckpoint,
   WorkspaceSearchMatch,
   WorkspaceTerminalResult,
@@ -58,6 +62,7 @@ import type {
 type ActivityView = "explorer" | "search" | "git" | "changes" | "run";
 type BottomView = "terminal" | "problems" | "output";
 type AgentMode = "ask" | "plan" | "agent" | "auto";
+type CenterView = "editor" | "preview";
 
 const RECENT_WORKSPACES_KEY = "privai.coding.recentWorkspaces";
 
@@ -98,7 +103,9 @@ export default function CodingSpacePage() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [centerView, setCenterView] = useState<CenterView>("editor");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [preview, setPreview] = useState<PreviewInfo | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeView, setActiveView] = useState<ActivityView>("explorer");
   const [sideOpen, setSideOpen] = useState(true);
@@ -118,6 +125,7 @@ export default function CodingSpacePage() {
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [workspaceDialogErr, setWorkspaceDialogErr] = useState<string | null>(null);
   const autoCheckpointStarted = useRef(false);
+  const currentPreviewUrl = useRef<string | null>(null);
 
   const mode = agentModes.find((item) => item.id === agentMode) ?? agentModes[2];
   const commandApprovalRequired = agentMode !== "auto";
@@ -141,6 +149,24 @@ export default function CodingSpacePage() {
     }
   }, []);
 
+  const refreshPreview = useCallback(async () => {
+    try {
+      const next = await board.previewStatus();
+      if (next.running && next.url) {
+        setPreview(next);
+        if (currentPreviewUrl.current !== next.url) {
+          currentPreviewUrl.current = next.url;
+          setCenterView("preview");
+        }
+      } else {
+        currentPreviewUrl.current = null;
+        setPreview(null);
+      }
+    } catch {
+      /* preview status is best-effort; chat and terminal still show errors */
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void refreshWorkspace();
@@ -149,6 +175,20 @@ export default function CodingSpacePage() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refreshCheckpoints, refreshWorkspace]);
+
+  useEffect(() => {
+    if (!workspaceRoot) {
+      currentPreviewUrl.current = null;
+      const reset = window.setTimeout(() => setPreview(null), 0);
+      return () => window.clearTimeout(reset);
+    }
+    const initial = window.setTimeout(() => void refreshPreview(), 0);
+    const interval = window.setInterval(() => void refreshPreview(), 2000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [refreshPreview, workspaceRoot]);
 
   useEffect(() => {
     autoCheckpointStarted.current = false;
@@ -164,6 +204,13 @@ export default function CodingSpacePage() {
       setChangedFiles(payload.changedFiles);
       setAgentHitLimit(payload.hitLimit);
 
+      const previewFinished = payload.events.some(
+        (event) =>
+          event.name === "start_project_preview" &&
+          (event.status === "completed" || event.status === "failed"),
+      );
+      if (previewFinished) void refreshPreview();
+
       const startedWork = payload.events.some(
         (event) => event.status === "running" || event.status === "pending_approval",
       );
@@ -176,7 +223,7 @@ export default function CodingSpacePage() {
           /* manual checkpoint button remains available */
         });
     },
-    [refreshCheckpoints],
+    [refreshCheckpoints, refreshPreview],
   );
 
   async function chooseWorkspace() {
@@ -221,10 +268,49 @@ export default function CodingSpacePage() {
   function switchToWorkspace(path: string) {
     setWorkspaceRoot(path);
     setSelectedPath(null);
+    setCenterView("editor");
+    currentPreviewUrl.current = null;
+    setPreview(null);
     setRefreshKey((n) => n + 1);
     rememberWorkspace(path, setRecents);
+    void board.stopPreview().catch(() => {
+      /* switching workspaces should not be blocked by preview cleanup */
+    });
     void refreshCheckpoints();
   }
+
+  function openFile(path: string) {
+    setSelectedPath(path);
+    setCenterView("editor");
+  }
+
+  const stopCodingPreview = useCallback(async () => {
+    await board.stopPreview();
+    currentPreviewUrl.current = null;
+    setPreview(null);
+    setCenterView("editor");
+  }, []);
+
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const startCodingPreview = useCallback(async () => {
+    if (!workspaceRoot) return;
+    setPreviewBusy(true);
+    setPreviewErr(null);
+    try {
+      const cwd = inferPreviewCwd(changedFiles);
+      const next = await board.startPreview(cwd);
+      if (next?.url) {
+        currentPreviewUrl.current = next.url;
+        setPreview(next);
+        setCenterView("preview");
+      }
+    } catch (err) {
+      setPreviewErr((err as Error).message);
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [changedFiles, workspaceRoot]);
 
   function openSession(id: string) {
     router.replace(`/coding?session=${encodeURIComponent(id)}`);
@@ -289,7 +375,7 @@ export default function CodingSpacePage() {
           changedFiles={changedFiles}
           agentHitLimit={agentHitLimit}
           lastRun={lastRun}
-          onOpenFile={setSelectedPath}
+          onOpenFile={openFile}
           onOpenRecent={openRecent}
           onCreateWorkspace={openCreateWorkspaceDialog}
           onChooseWorkspace={chooseWorkspace}
@@ -311,35 +397,35 @@ export default function CodingSpacePage() {
       </aside>
 
       <main className="min-w-0 min-h-0 overflow-hidden grid grid-rows-[56px_minmax(0,1fr)_auto]">
-        <header className="min-h-0 border-b border-line bg-bg px-3 flex items-center gap-3">
+        <header className="min-h-0 border-b border-line bg-bg px-3 flex items-center gap-2 overflow-x-auto">
           {!sideOpen ? (
             <Button
               type="button"
               size="icon"
               variant="ghost"
-              className="h-8 w-8"
+              className="h-8 w-8 shrink-0"
               onClick={() => setSideOpen(true)}
               title="Show side panel"
             >
               <ChevronsRight className="h-4 w-4" />
             </Button>
           ) : null}
-          <div className="grid h-9 w-9 place-items-center rounded-[8px] bg-accent-tint text-accent">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] bg-accent-tint text-accent">
             <Code2 className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <div className="text-sm font-semibold">Coding</div>
-              <span className="rounded-full border border-line bg-surface px-2 py-0.5 text-[11px] text-muted">
+              <span className="hidden sm:inline rounded-full border border-line bg-surface px-2 py-0.5 text-[11px] text-muted truncate max-w-[180px]">
                 {workspaceRoot ? compactWorkspace(workspaceRoot) : "No workspace"}
               </span>
             </div>
-            <div className="truncate text-xs text-muted">
+            <div className="hidden xl:block truncate text-xs text-muted">
               Build, inspect, run, checkpoint, and review projects with Privai.
             </div>
           </div>
 
-          <div className="hidden xl:flex items-center rounded-[10px] border border-line bg-surface p-1">
+          <div className="hidden 2xl:flex items-center rounded-[10px] border border-line bg-surface p-1 shrink-0">
             {agentModes.map((item) => (
               <button
                 key={item.id}
@@ -363,28 +449,85 @@ export default function CodingSpacePage() {
             size="sm"
             variant="secondary"
             onClick={openCreateWorkspaceDialog}
+            className="shrink-0"
+            title="Create workspace"
           >
             <FolderPlus className="h-3.5 w-3.5" />
-            New
+            <span className="hidden 2xl:inline">New</span>
           </Button>
-          <Button type="button" size="sm" variant="secondary" onClick={chooseWorkspace}>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={chooseWorkspace}
+            className="shrink-0"
+            title="Open workspace"
+          >
             <FolderOpen className="h-3.5 w-3.5" />
-            Open
+            <span className="hidden 2xl:inline">Open</span>
           </Button>
           <Button
             type="button"
             size="sm"
             variant="secondary"
             onClick={() => setRefreshKey((n) => n + 1)}
+            className="shrink-0"
+            title="Refresh workspace"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
+            <span className="hidden 2xl:inline">Refresh</span>
           </Button>
+          {workspaceRoot && !(preview?.running && preview.url) ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              loading={previewBusy}
+              onClick={startCodingPreview}
+              className="shrink-0"
+              title={previewErr ?? "Detect and start the local dev server"}
+            >
+              <MonitorPlay className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Run preview</span>
+            </Button>
+          ) : null}
+          {workspaceRoot && preview?.running && preview.url ? (
+            <div className="flex items-center rounded-[10px] border border-line bg-surface p-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setCenterView("editor")}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-xs transition",
+                  centerView === "editor"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:bg-surface-2 hover:text-ink",
+                )}
+                title="Editor"
+              >
+                <FileCode2 className="h-3.5 w-3.5" />
+                <span className="hidden lg:inline">Editor</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCenterView("preview")}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-xs transition",
+                  centerView === "preview"
+                    ? "bg-accent text-white"
+                    : "text-muted hover:bg-surface-2 hover:text-ink",
+                )}
+                title="Preview"
+              >
+                <MonitorPlay className="h-3.5 w-3.5" />
+                <span className="hidden lg:inline">Preview</span>
+              </button>
+            </div>
+          ) : null}
           <Button
             type="button"
             size="icon"
             variant="ghost"
-            className="h-8 w-8"
+            className="h-8 w-8 shrink-0"
             onClick={() => setAgentOpen((open) => !open)}
             title={agentOpen ? "Hide agent" : "Show agent"}
           >
@@ -397,7 +540,15 @@ export default function CodingSpacePage() {
         </header>
 
         {workspaceRoot ? (
-          <CodeEditorPane path={selectedPath} />
+          centerView === "preview" && preview?.running && preview.url ? (
+            <CodingPreviewPane
+              preview={preview}
+              onRefresh={refreshPreview}
+              onStop={stopCodingPreview}
+            />
+          ) : (
+            <CodeEditorPane path={selectedPath} />
+          )
         ) : (
           <NoWorkspacePane
             onCreateWorkspace={openCreateWorkspaceDialog}
@@ -496,7 +647,10 @@ export default function CodingSpacePage() {
           onAgentActivity={handleAgentActivity}
           commandApprovalRequired={commandApprovalRequired}
           autoApproveReadOnlyCommands={agentMode === "auto" ? true : undefined}
-          composerDefaultMode={mode.composerMode}
+          composerDefaultMode="agent"
+          composerAgentOnly
+          onOpenFile={openFile}
+          onClose={() => setAgentOpen(false)}
         />
       </div>
       </div>
@@ -609,6 +763,133 @@ function NoWorkspacePane({
         </div>
       </div>
     </div>
+  );
+}
+
+function CodingPreviewPane({
+  preview,
+  onRefresh,
+  onStop,
+}: {
+  preview: PreviewInfo;
+  onRefresh: () => Promise<void>;
+  onStop: () => Promise<void>;
+}) {
+  const [frameKey, setFrameKey] = useState(0);
+  const [busy, setBusy] = useState<"refresh" | "stop" | null>(null);
+  const url = preview.url || "";
+
+  async function reload() {
+    setBusy("refresh");
+    try {
+      await onRefresh();
+      setFrameKey((key) => key + 1);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function stop() {
+    setBusy("stop");
+    try {
+      await onStop();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="min-h-0 flex-1 overflow-hidden bg-bg flex flex-col">
+      <header className="h-12 shrink-0 border-b border-line bg-surface px-3 flex items-center gap-3">
+        <div className="grid h-8 w-8 place-items-center rounded-[8px] bg-accent-tint text-accent">
+          <MonitorPlay className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold">Local preview</span>
+            {preview.ready ? (
+              <span className="rounded-full border border-good/20 bg-good/5 px-2 py-0.5 text-[11px] text-good">
+                ready
+              </span>
+            ) : (
+              <span className="rounded-full border border-warn/20 bg-warn/5 px-2 py-0.5 text-[11px] text-warn">
+                starting
+              </span>
+            )}
+          </div>
+          <div className="truncate font-mono text-[11px] text-muted">
+            {preview.command || "Managed preview server"}
+          </div>
+        </div>
+        {url ? (
+          <code className="hidden max-w-[240px] truncate rounded-full border border-line bg-bg px-2 py-1 text-[11px] text-muted xl:block">
+            {url.replace("http://", "")}
+          </code>
+        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          loading={busy === "refresh"}
+          onClick={reload}
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Reload
+        </Button>
+        {url ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="danger"
+          loading={busy === "stop"}
+          onClick={stop}
+        >
+          <StopCircle className="h-3.5 w-3.5" />
+          Stop
+        </Button>
+      </header>
+
+      {!preview.ready ? (
+        <div className="shrink-0 border-b border-line p-3">
+          <Notice tone="muted">
+            Privai started the preview server and is waiting for the page to
+            become available. If the app shows an error overlay, ask the coding
+            agent to fix the preview error and run the build again.
+          </Notice>
+        </div>
+      ) : null}
+
+      {url ? (
+        <iframe
+          key={`${url}-${frameKey}`}
+          src={url}
+          title="Local app preview"
+          className="min-h-0 flex-1 border-0 bg-white"
+        />
+      ) : (
+        <div className="grid min-h-0 flex-1 place-items-center p-6 text-center">
+          <div className="max-w-sm">
+            <MonitorPlay className="mx-auto mb-3 h-10 w-10 text-accent" />
+            <h2 className="font-serif text-2xl tracking-tight">
+              No preview URL yet
+            </h2>
+            <p className="mt-2 text-sm text-muted">
+              Ask the agent to build and preview the app after verification.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1243,6 +1524,21 @@ function placeholderForMode(mode: AgentMode) {
   if (mode === "plan") return "Describe the coding goal and ask for a step-by-step plan...";
   if (mode === "auto") return "Ask the agent to work fast. Commands will not ask for approval...";
   return "Ask the agent to build, fix, refactor, run checks, or use / commands...";
+}
+
+function inferPreviewCwd(files: string[]) {
+  const packageFile = files.find((file) => file.endsWith("package.json"));
+  if (packageFile) {
+    const parts = packageFile.split("/");
+    parts.pop();
+    return parts.join("/") || ".";
+  }
+  const sourceFile = files.find((file) => /(^|\/)src\//.test(file));
+  if (sourceFile) {
+    const beforeSrc = sourceFile.split("/src/")[0];
+    return beforeSrc || ".";
+  }
+  return files[0]?.split("/")[0] || ".";
 }
 
 function compactWorkspace(path: string) {

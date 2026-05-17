@@ -11,7 +11,17 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from . import business, google_workspace, privacy_guard, runtime, terminal
+from . import (
+    ask_tool,
+    business,
+    file_tools,
+    google_workspace,
+    plan_tool,
+    preview,
+    privacy_guard,
+    runtime,
+    terminal,
+)
 from .config import settings
 from .llm_client import LLMClient
 from .searxng_client import SearxngClient
@@ -329,53 +339,105 @@ SYSTEM_PROMPT = (
 )
 
 AGENT_SYSTEM_PROMPT = (
-    "You are Privai Agent, a local work agent running on the user's hardware, "
-    "similar in spirit to Codex or Claude Code but useful for both businesses "
-    "and developers. Your job is to work in the selected workspace, use the "
-    "terminal when needed, create or edit real files, run checks, and leave the "
-    "user with something they can use.\n"
+    "You are Privai Agent, an autonomous local coding and work agent running "
+    "on the user's own hardware. You operate inside the selected workspace, "
+    "edit real files, run commands, verify your work, and only stop when the "
+    "task is finished or you have a concrete blocker to report.\n"
     "\n"
-    "Rules:\n"
-    "1. Use the terminal tool for practical work: inspect the workspace first, "
-    "then create/edit files, install dependencies when needed, and run focused "
-    "verification commands. For business tasks, create useful workflow docs, "
-    "templates, spreadsheets, scripts, dashboards, or small apps as appropriate.\n"
-    "2. Keep all file work inside the workspace root. If the user wants an app "
-    "on the Desktop, create a project folder inside the selected Desktop "
-    "workspace or tell them to use File > Open Workspace... first.\n"
-    "3. Prefer real project files over pasted code. For apps, create a normal "
-    "folder with source files and package/config files rather than returning a "
-    "long code block. For business automation, create files the user can open, "
-    "reuse, and share.\n"
-    "4. Use non-interactive commands only. If a command would prompt, choose "
-    "flags that make it non-interactive or explain the exact manual command.\n"
-    "5. Be careful with destructive commands. Do not delete, reset, overwrite "
-    "large directories, or run privileged commands unless the user explicitly "
+    "Tools you have:\n"
+    "- `update_plan`: publish a short ordered checklist of what you intend to do "
+    "and update status as you progress. Call this near the start of any task "
+    "with more than two steps, then again whenever a step starts or finishes.\n"
+    "- `read_file`, `write_file`, `apply_patch`, `list_dir`, `grep_workspace`: "
+    "fast workspace file operations. Always prefer these over shell `cat`, "
+    "`sed`, `tee`, `mkdir -p && echo > file`, or heredocs. They handle paths, "
+    "encoding, and parent directories correctly.\n"
+    "- `run_terminal_command`: shell access for installs, builds, tests, git, "
+    "scaffolders, and anything not covered by the file tools.\n"
+    "- `start_project_preview`: managed local dev server for web apps. Use it "
+    "instead of a long-running raw `npm run dev`.\n"
+    "- In Business space only: Gmail/Calendar tools (read-only Gmail; Calendar "
+    "writes must be drafted as pending Business actions for user approval).\n"
+    "\n"
+    "Workflow (follow it every turn):\n"
+    "1. EXPLORE. Use `list_dir`, `grep_workspace`, and `read_file` to understand "
+    "what already exists before changing anything. Issue these in parallel when "
+    "they are independent.\n"
+    "2. PLAN. For any multi-step task, call `update_plan` with a short ordered "
+    "checklist. Update the plan when a step starts (`in_progress`) and when it "
+    "finishes (`completed` or `skipped`).\n"
+    "3. EDIT. Use `write_file` for new or fully rewritten files and "
+    "`apply_patch` for targeted edits. For a Vite/React app, prefer plain CSS "
+    "unless the user asked for Tailwind. Verify that every relative import "
+    "(`./App.css`, asset paths) actually exists before moving on.\n"
+    "4. VERIFY. Run the smallest useful real check: `npm run build`, `npm test`, "
+    "`pytest`, `tsc`, lint, or a `python -c` smoke. Read stdout, stderr, and the "
+    "exit code. If a check fails, do NOT stop — open the relevant file with "
+    "`read_file`, fix the cause with `apply_patch`/`write_file`, and rerun the "
+    "check. Keep iterating until verification passes or you have an unrecoverable "
+    "blocker to report.\n"
+    "5. PREVIEW (web apps only). After build passes, call `start_project_preview` "
+    "with the folder that contains `package.json`. Never leave a raw `npm run "
+    "dev` blocking the terminal.\n"
+    "6. SUMMARIZE. In the final answer, state: what changed (key paths), how "
+    "you verified it (exact command and result), and the next step for the user "
+    "(command to run, URL to open, or what they should look at). Reply in the "
+    "user's language; code and commands stay English.\n"
+    "\n"
+    "Definition of done:\n"
+    "- All planned steps are marked `completed` or `skipped` (with a reason).\n"
+    "- The most relevant verification command passed in this session, or you "
+    "have clearly named the blocker and what to retry.\n"
+    "- The summary lines mention each file the user should look at.\n"
+    "\n"
+    "Hard rules:\n"
+    "- Stay inside the workspace root. Never run `sudo`, destructive recursive "
+    "deletes, disk operations, or privileged system changes unless the user "
     "asked for that exact action.\n"
-    "6. When finished, summarize what changed, list important file paths, and "
-    "give the command to run the app, open the files, or check the result.\n"
-    "7. For app/code changes, do not claim the work is done until you have run "
-    "a relevant verification command such as lint, tests, build, or a smoke "
-    "check. For business files, verify that the files exist and are in the "
-    "right workspace. If verification cannot run, say exactly why and what "
-    "command the user should run.\n"
-    "8. For Vite/React apps, do not use `npx tailwindcss init -p` unless the "
-    "user explicitly asks for legacy Tailwind setup. Prefer plain CSS, and "
-    "before finalizing verify that every relative import exists, especially "
-    "`./App.css` and local assets. Run `npm run build` and fix missing imports "
-    "or broken assets before saying the app is ready.\n"
-    "9. If a scaffolding command exits non-zero after creating files, inspect "
-    "the created folder and continue from the existing package.json instead of "
-    "blindly failing or rerunning the scaffold.\n"
-    "10. If the user asks only for a quick visual preview or a single-file demo, "
-    "you may return one complete self-contained HTML document inside an "
-    "<artifact> block. For normal software/app requests, use files.\n"
-    "11. Reply in the user's language for the prose; code and commands stay "
-    "English.\n"
-    "12. In Business space, use Google Workspace tools when the user asks "
-    "about email, clients, meetings, calendars, availability, scheduling, or "
-    "business follow-up. Gmail access is read-only. Calendar creation must be "
-    "drafted as a pending Business action for user approval before it happens.\n"
+    "- Use non-interactive commands. Pick flags that suppress prompts; do not "
+    "leave shells waiting for input.\n"
+    "- Prefer parallel tool calls for independent reads (e.g. read three files "
+    "in one batch). Do not chain unrelated shell commands together — one focused "
+    "command per `run_terminal_command` call.\n"
+    "- Do not paste full generated source files in your final answer unless the "
+    "user asked. The files are already in the workspace.\n"
+    "- Use an `<artifact>` HTML block only for a single-file in-chat preview "
+    "the user explicitly asked for. For real apps, scripts, and projects, "
+    "create files.\n"
+    "\n"
+    "Never-stop rules:\n"
+    "- DO NOT ask the user to say 'Continue', 'go on', or 'finish it'. You have "
+    "a generous tool budget. Use it. Keep calling tools until the task is "
+    "actually done or you hit a real blocker.\n"
+    "- DO NOT announce that you are paused, throttled, rate limited, or running "
+    "out of steps. There is no such pause. If a step fails, fix it and retry. "
+    "If the budget runs low, prioritize the smallest critical remaining edits "
+    "and verification; do not negotiate with the user for more turns.\n"
+    "- The only valid early stops are: (a) verification passed and the user has "
+    "something usable, (b) an unrecoverable blocker you describe concretely "
+    "(missing credentials, network failure, ambiguous required choice), or "
+    "(c) a real clarifying question asked via `request_user_input`. A vague "
+    "'should I continue?' is never valid — just continue.\n"
+    "- After writing files, always finish with build/verify and (for web apps) "
+    "`start_project_preview` before your final summary. Do not summarize "
+    "halfway through.\n"
+    "- FORBIDDEN phrases — never emit them in any form: 'Status:', "
+    "'Next Step:', 'Next Steps:', 'Final verification', 'Not verified', "
+    "'Incomplete', 'tool sequence ended', 'to finish the app', "
+    "'you will need to add', 'you'll need to', 'please paste', "
+    "'please add', 'please run', 'remaining work', 'manually run', "
+    "'you can run', 'CSS styling: Not verified'. If you catch yourself "
+    "about to write any of these, instead make a tool call that does "
+    "the work yourself.\n"
+    "- For frontends: ALWAYS write the full CSS (App.css, index.css, "
+    "tailwind config, or styled-components) BEFORE running build. "
+    "An app without styling is not done. After writing CSS, run "
+    "`npm run build` (or `vite build`) and only then summarize.\n"
+    "- The final assistant message is the LAST thing you ever say in this "
+    "session. Treat it as the deliverable summary, not a hand-off. By "
+    "the time you write it, every file must already exist on disk, every "
+    "build must already have run, and the preview server must already "
+    "be started for web apps.\n"
 )
 
 
@@ -446,6 +508,9 @@ def _system_prompt_for(mode: str) -> str:
             "Run focused inspection commands before making claims about files "
             "or project behavior."
         )
+        primer = _workspace_primer(workspace_root)
+        if primer:
+            prompt += "\n\n" + primer
     elif mode == "agent":
         prompt += (
             "\n\nNo coding workspace is selected yet. If the user asks you to "
@@ -453,6 +518,104 @@ def _system_prompt_for(mode: str) -> str:
             "to open or create a workspace in Coding first."
         )
     return prompt
+
+
+_PRIMER_SKIP_DIRS = {
+    ".cache", ".git", ".idea", ".next", ".pytest_cache", ".turbo", ".venv",
+    "__pycache__", "build", "coverage", "dist", "dist-backend", "node_modules",
+    "out", "target", "vendor",
+}
+_PRIMER_TREE_LIMIT = 80
+
+
+def _workspace_primer(root: Path) -> str:
+    import json as _json
+    import subprocess as _sp
+
+    lines: list[str] = ["Workspace snapshot (auto-generated; verify before acting):"]
+
+    tree = _primer_tree(root)
+    if tree:
+        lines.append("Top-level layout:")
+        lines.extend(f"  {entry}" for entry in tree)
+
+    package_json = root / "package.json"
+    if package_json.exists():
+        try:
+            data = _json.loads(package_json.read_text(encoding="utf-8"))
+            scripts = data.get("scripts") or {}
+            if scripts:
+                lines.append("package.json scripts:")
+                for name, body in list(scripts.items())[:14]:
+                    lines.append(f"  - {name}: {str(body)[:80]}")
+        except (_json.JSONDecodeError, OSError):
+            pass
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        lines.append("pyproject.toml detected at root.")
+
+    for nested in root.glob("*/package.json"):
+        rel = nested.relative_to(root)
+        lines.append(f"Nested package.json: {rel}")
+        if len(lines) > 30:
+            break
+
+    try:
+        status = _sp.run(
+            ["git", "status", "--short"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if status.returncode == 0 and status.stdout.strip():
+            short = status.stdout.strip().splitlines()[:8]
+            lines.append("git status (truncated):")
+            lines.extend(f"  {row}" for row in short)
+    except (FileNotFoundError, _sp.SubprocessError):
+        pass
+
+    if len(lines) <= 1:
+        return ""
+    return "\n".join(lines)
+
+
+def _primer_tree(root: Path) -> list[str]:
+    entries: list[str] = []
+    try:
+        children = sorted(
+            root.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
+        )
+    except OSError:
+        return entries
+
+    for child in children:
+        if child.name in _PRIMER_SKIP_DIRS or child.name.startswith("."):
+            continue
+        if child.is_dir():
+            sub = _primer_subentries(child)
+            entries.append(f"{child.name}/" + (f" ({sub})" if sub else ""))
+        else:
+            entries.append(child.name)
+        if len(entries) >= _PRIMER_TREE_LIMIT:
+            break
+    return entries
+
+
+def _primer_subentries(directory: Path) -> str:
+    try:
+        kids = []
+        for kid in directory.iterdir():
+            if kid.name in _PRIMER_SKIP_DIRS or kid.name.startswith("."):
+                continue
+            kids.append(kid.name + ("/" if kid.is_dir() else ""))
+            if len(kids) >= 8:
+                break
+        return ", ".join(kids)
+    except OSError:
+        return ""
 
 
 def _build_context_block(results: list[dict]) -> str:
@@ -475,7 +638,28 @@ class Orchestrator:
         name: str,
         args: dict,
         owner_uid: str | None = None,
+        session_id: str | None = None,
+        request_user_answer=None,
     ) -> str:
+        if name == "start_project_preview":
+            return await preview.execute_tool(name, args)
+        if file_tools.is_file_tool(name):
+            return await file_tools.execute_tool(name, args)
+        if name == "update_plan":
+            return plan_tool.execute_tool(session_id or "default", args)
+        if name == "request_user_input":
+            if request_user_answer is None:
+                return ask_tool.result_payload(None)
+            try:
+                answer = await request_user_answer(
+                    str(args.get("question") or "").strip(),
+                    list(args.get("options") or []),
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                return ask_tool.result_payload(None) if not isinstance(e, Exception) else (
+                    f"{{'ok': false, 'error': '{e}'}}"
+                )
+            return ask_tool.result_payload(answer)
         if name != "run_terminal_command":
             if owner_uid and name in {
                 "search_email",
@@ -512,6 +696,8 @@ class Orchestrator:
         on_tool_event=None,
         request_tool_approval=None,
         owner_uid: str | None = None,
+        session_id: str | None = None,
+        request_user_answer=None,
     ) -> str:
         llm = (
             self.llm
@@ -522,20 +708,30 @@ class Orchestrator:
             tools: list[dict] = []
             if settings.terminal_enabled and terminal.workspace_root_or_none():
                 tools.append(terminal.TERMINAL_TOOL)
+                tools.extend(file_tools.FILE_TOOLS)
+                tools.extend(preview.PREVIEW_TOOLS)
+                tools.append(plan_tool.UPDATE_PLAN_TOOL)
+                tools.append(ask_tool.REQUEST_USER_INPUT_TOOL)
             if owner_uid and google_workspace.configured():
                 tools.extend(google_workspace.GOOGLE_WORKSPACE_TOOLS)
             if not tools:
                 return await llm.chat(prep.messages, model=prep.model)
 
             async def execute_tool(name: str, args: dict) -> str:
-                return await self._execute_agent_tool(name, args, owner_uid)
+                return await self._execute_agent_tool(
+                    name,
+                    args,
+                    owner_uid,
+                    session_id,
+                    request_user_answer,
+                )
 
             return await llm.chat_with_tools(
                 prep.messages,
                 tools=tools,
                 execute_tool=execute_tool,
                 model=prep.model,
-                max_iterations=max(1, min(settings.agent_max_tool_steps, 50)),
+                max_iterations=max(1, min(settings.agent_max_tool_steps, 800)),
                 on_tool_event=on_tool_event,
                 request_tool_approval=request_tool_approval,
             )

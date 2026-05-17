@@ -86,8 +86,9 @@ export function Sidebar({
   async function newChat() {
     setCreating(true);
     try {
-      const space = spaceFromPath(pathname);
-      const s = await board.createSession(spaceTitle(space), space);
+      // Sidebar "New chat" always opens a neutral chat. Space-tagged sessions
+      // are created from inside the Business / Coding / Learning pages.
+      const s = await board.createSession(spaceTitle("general"), "general");
       onChange?.();
       router.push(sessionHref(s));
     } catch (e) {
@@ -285,13 +286,6 @@ export function Sidebar({
       </div>
     </aside>
   );
-}
-
-function spaceFromPath(pathname: string | null): ChatSpace {
-  if (pathname?.startsWith("/business")) return "business";
-  if (pathname?.startsWith("/coding")) return "coding";
-  if (pathname?.startsWith("/learning")) return "learning";
-  return "general";
 }
 
 function spaceIcon(space: ChatSpace) {

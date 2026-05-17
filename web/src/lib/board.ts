@@ -10,11 +10,18 @@ import type {
   AgentToolEvent,
   BusinessAction,
   BusinessEmailMessage,
+  BusinessEmailScanResult,
   BusinessSettings,
+  CalendarEvent,
   CalendarSlot,
   GoogleWorkspaceStatus,
+  LearningArtifact,
+  LearningDashboard,
+  LearningExamPlan,
   LearningMaterial,
   LearningPracticeSet,
+  LearningReviewEvent,
+  LearningStudyItem,
   PreviewInfo,
   PrivacyMode,
   SearchSource,
@@ -336,6 +343,32 @@ export const board = {
       `/business/email/thread/${encodeURIComponent(threadId)}`,
     ),
 
+  businessEmailScan: (days = 14, maxResults = 50) =>
+    api<BusinessEmailScanResult>("/business/email/scan", {
+      method: "POST",
+      body: { days, maxResults },
+    }),
+
+  businessCalendarEvents: (params: {
+    timeMin?: string;
+    timeMax?: string;
+    calendarId?: string;
+    maxResults?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.timeMin) search.set("timeMin", params.timeMin);
+    if (params.timeMax) search.set("timeMax", params.timeMax);
+    if (params.calendarId) search.set("calendarId", params.calendarId);
+    if (params.maxResults) search.set("maxResults", String(params.maxResults));
+    const qs = search.toString();
+    return api<{
+      calendarId: string;
+      timeMin: string;
+      timeMax: string;
+      events: CalendarEvent[];
+    }>(`/business/calendar/events${qs ? `?${qs}` : ""}`);
+  },
+
   businessCalendarSlots: (payload: {
     timeMin: string;
     timeMax: string;
@@ -420,6 +453,106 @@ export const board = {
       body: payload,
     }),
 
+  learningDashboard: (sid: string) =>
+    api<LearningDashboard>(`/learning/${sid}/dashboard`),
+
+  generateLearningGuide: (sid: string, materialIds?: string[]) =>
+    api<{ artifact: LearningArtifact; dashboard: LearningDashboard }>(
+      `/learning/${sid}/guide`,
+      {
+        method: "POST",
+        body: { materialIds: materialIds?.length ? materialIds : null },
+      },
+    ),
+
+  learningStudyItems: (sid: string, includeSuspended = false) =>
+    api<{ items: LearningStudyItem[] }>(
+      `/learning/${sid}/study-items?includeSuspended=${includeSuspended ? "true" : "false"}`,
+    ).then((r) => r.items),
+
+  generateLearningStudyItems: (
+    sid: string,
+    payload: { materialIds?: string[]; count?: number } = {},
+  ) =>
+    api<{ items: LearningStudyItem[]; dashboard: LearningDashboard }>(
+      `/learning/${sid}/study-items/generate`,
+      {
+        method: "POST",
+        body: {
+          materialIds: payload.materialIds?.length ? payload.materialIds : null,
+          count: payload.count ?? 12,
+        },
+      },
+    ),
+
+  updateLearningStudyItem: (
+    sid: string,
+    itemId: string,
+    patch: Partial<
+      Pick<
+        LearningStudyItem,
+        | "type"
+        | "topic"
+        | "prompt"
+        | "answer"
+        | "options"
+        | "sourceHint"
+        | "sourceExcerpt"
+        | "status"
+      >
+    >,
+  ) =>
+    api<LearningStudyItem>(
+      `/learning/${sid}/study-items/${encodeURIComponent(itemId)}`,
+      { method: "PATCH", body: patch },
+    ),
+
+  deleteLearningStudyItem: (sid: string, itemId: string) =>
+    api<{ ok: boolean }>(
+      `/learning/${sid}/study-items/${encodeURIComponent(itemId)}`,
+      { method: "DELETE" },
+    ),
+
+  learningReviewQueue: (sid: string, limit = 30) =>
+    api<{ items: LearningStudyItem[] }>(
+      `/learning/${sid}/review/queue?limit=${limit}`,
+    ).then((r) => r.items),
+
+  recordLearningReview: (
+    sid: string,
+    payload: {
+      studyItemId: string;
+      rating: "again" | "hard" | "good" | "easy";
+    },
+  ) =>
+    api<{
+      event: LearningReviewEvent;
+      item: LearningStudyItem;
+      dashboard: LearningDashboard;
+    }>(`/learning/${sid}/review/events`, {
+      method: "POST",
+      body: payload,
+    }),
+
+  learningExamPlan: (sid: string) =>
+    api<{ examPlan: LearningExamPlan | null }>(`/learning/${sid}/exam-plan`),
+
+  saveLearningExamPlan: (
+    sid: string,
+    payload: { examDate?: string | null; dailyTarget?: number; title?: string },
+  ) =>
+    api<{ examPlan: LearningExamPlan; dashboard: LearningDashboard }>(
+      `/learning/${sid}/exam-plan`,
+      {
+        method: "POST",
+        body: {
+          examDate: payload.examDate ?? null,
+          dailyTarget: payload.dailyTarget ?? 20,
+          title: payload.title ?? null,
+        },
+      },
+    ),
+
   decideCommandApproval: (approvalId: string, approved: boolean) =>
     api<{ ok: boolean; approved: boolean }>(`/agent/approvals/${approvalId}`, {
       method: "POST",
@@ -437,6 +570,12 @@ export const board = {
       `/agent/approvals/${approvalId}/reject`,
       { method: "POST" },
     ),
+
+  answerAgentQuestion: (questionId: string, answer: string) =>
+    api<{ ok: boolean }>(`/agent/questions/${questionId}`, {
+      method: "POST",
+      body: { answer },
+    }),
 
   workspaceTree: (path = ".") =>
     api<WorkspaceTree>(`/workspace/tree?path=${encodeURIComponent(path)}`),
@@ -502,8 +641,15 @@ export interface StreamHandlers {
   }) => void;
   onDelta?: (delta: string) => void;
   onTool?: (event: AgentToolEvent) => void;
+  onStatus?: (status: AgentStatusUpdate | null) => void;
   onDone?: (assistant: ChatMessage, artifact: Artifact | null) => void;
   onError?: (err: string) => void;
+}
+
+export interface AgentStatusUpdate {
+  phase: "thinking" | "running" | "verifying" | "planning" | "idle";
+  label?: string;
+  detail?: string;
 }
 
 export interface StreamOpts {
@@ -569,6 +715,12 @@ export async function streamChat(
         if (obj.type === "meta") handlers.onMeta?.(obj);
         else if (obj.type === "delta") handlers.onDelta?.(obj.delta);
         else if (obj.type === "tool") handlers.onTool?.(obj);
+        else if (obj.type === "status")
+          handlers.onStatus?.(
+            obj.phase
+              ? { phase: obj.phase, label: obj.label, detail: obj.detail }
+              : null,
+          );
         else if (obj.type === "done")
           handlers.onDone?.(obj.assistant, obj.artifact ?? null);
         else if (obj.type === "error") handlers.onError?.(obj.error);

@@ -33,3 +33,4 @@ agent/*.log
 .firebase/
 firebase-debug.log
 *.firebase-debug.log
+tmp/

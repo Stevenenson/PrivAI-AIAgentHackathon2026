@@ -1,20 +1,27 @@
 "use client";
 import {
+  AlertCircle,
+  ArrowRight,
   BriefcaseBusiness,
   CalendarClock,
   CheckCircle2,
+  Clock3,
   ExternalLink,
+  FileText,
   Inbox,
   Link2,
   Mail,
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
+  UserRound,
   XCircle,
+  Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { SpaceAgentPanel } from "@/components/SpaceAgentPanel";
 import { Button } from "@/components/ui/Button";
@@ -23,7 +30,10 @@ import { board } from "@/lib/board";
 import { cn } from "@/lib/cn";
 import type {
   BusinessAction,
+  BusinessEmailInsight,
   BusinessEmailMessage,
+  BusinessEmailScanResult,
+  CalendarEvent,
   GoogleWorkspaceStatus,
   SearchSource,
 } from "@/lib/types";
@@ -81,7 +91,7 @@ function BusinessHeader() {
 }
 
 function BusinessWorkspace({ agentSources }: { agentSources: SearchSource[] }) {
-  const [view, setView] = useState<"research" | "gmail" | "calendar" | "review">("research");
+  const [view, setView] = useState<"assistant" | "research" | "gmail" | "calendar" | "review">("assistant");
   const [google, setGoogle] = useState<GoogleWorkspaceStatus | null>(null);
   const [googleErr, setGoogleErr] = useState<string | null>(null);
 
@@ -111,6 +121,12 @@ function BusinessWorkspace({ agentSources }: { agentSources: SearchSource[] }) {
     <section className="h-full min-h-0 overflow-hidden bg-bg grid grid-rows-[auto_auto_minmax(0,1fr)]">
       <div className="border-b border-line bg-bg px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
+          <WorkspaceTab
+            active={view === "assistant"}
+            icon={<Sparkles className="h-4 w-4" />}
+            label="Assistant"
+            onClick={() => setView("assistant")}
+          />
           <WorkspaceTab
             active={view === "research"}
             icon={<Search className="h-4 w-4" />}
@@ -144,6 +160,14 @@ function BusinessWorkspace({ agentSources }: { agentSources: SearchSource[] }) {
       </div>
       <ActionReviewStrip onOpen={() => setView("review")} />
       <div className="min-h-0 overflow-hidden">
+        {view === "assistant" ? (
+          <InboxAssistantWorkspace
+            connected={Boolean(google?.connected)}
+            onOpenReview={() => setView("review")}
+            onOpenGmail={() => setView("gmail")}
+            onOpenCalendar={() => setView("calendar")}
+          />
+        ) : null}
         {view === "research" ? <ResearchWorkspace agentSources={agentSources} /> : null}
         {view === "gmail" ? <GmailWorkspace connected={Boolean(google?.connected)} /> : null}
         {view === "calendar" ? <CalendarWorkspace connected={Boolean(google?.connected)} /> : null}
@@ -260,6 +284,454 @@ function ActionReviewStrip({ onOpen }: { onOpen: () => void }) {
     >
       <span className="font-medium">{actions.length} pending action{actions.length === 1 ? "" : "s"}</span>
       <span className="ml-2 text-muted">Review before Privai creates calendar events or sends anything.</span>
+    </button>
+  );
+}
+
+function InboxAssistantWorkspace({
+  connected,
+  onOpenReview,
+  onOpenGmail,
+  onOpenCalendar,
+}: {
+  connected: boolean;
+  onOpenReview: () => void;
+  onOpenGmail: () => void;
+  onOpenCalendar: () => void;
+}) {
+  const [days, setDays] = useState(14);
+  const [scan, setScan] = useState<BusinessEmailScanResult | null>(null);
+  const [filter, setFilter] = useState("all");
+  const [loading, setLoading] = useState(false);
+  const [drafting, setDrafting] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const insights = scan?.insights ?? [];
+  const visibleInsights =
+    filter === "all"
+      ? insights
+      : insights.filter((insight) => insight.kind === filter);
+  const counts = insights.reduce<Record<string, number>>((acc, insight) => {
+    acc[insight.kind] = (acc[insight.kind] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  async function runScan(nextDays = days) {
+    setDays(nextDays);
+    setLoading(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      const result = await board.businessEmailScan(nextDays, 50);
+      setScan(result);
+      setFilter("all");
+      if (!result.insights.length) {
+        setNotice("No obvious meeting requests, follow-ups, deadlines, or tasks were found in recent email.");
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function draftMeeting(insight: BusinessEmailInsight) {
+    setDrafting(insight.id);
+    setErr(null);
+    setNotice(null);
+    try {
+      const slotWindow = nextMeetingWindow();
+      const slots = await board.businessCalendarSlots({
+        timeMin: slotWindow.start.toISOString(),
+        timeMax: slotWindow.end.toISOString(),
+        durationMinutes: insight.durationMinutes || 30,
+        calendarId: "primary",
+      });
+      const slot = slots.slots[0];
+      if (!slot) {
+        setErr("No free calendar slot was found in the next 7 days. Open Calendar to choose a wider range.");
+        return;
+      }
+      await board.draftBusinessCalendarEvent({
+        summary: insight.proposedTitle || insight.subject || "Business meeting",
+        description: insight.proposedDescription || insight.summary,
+        start: slot.start,
+        end: slot.end,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        attendees: insight.attendees ?? [],
+        calendarId: "primary",
+      });
+      setNotice("Calendar draft created. Review and approve it in Action Review.");
+      onOpenReview();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setDrafting(null);
+    }
+  }
+
+  if (!connected) {
+    return (
+      <section className="h-full min-h-0 overflow-y-auto p-5">
+        <div className="mx-auto max-w-4xl">
+          <div className="rounded-[10px] border border-line bg-surface p-6">
+            <div className="flex items-start gap-4">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-[8px] bg-accent-tint text-accent">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="font-serif text-2xl tracking-tight">
+                  Connect Google to start
+                </h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                  After Google is connected, Privai can scan Gmail in read-only
+                  mode, find meeting requests and follow-ups, check your
+                  Calendar, and create draft events for approval.
+                </p>
+                <div className="mt-5 grid gap-2 text-sm text-ink-2 sm:grid-cols-3">
+                  <CapabilityCard
+                    icon={<Mail className="h-4 w-4" />}
+                    title="Read-only Gmail"
+                    body="Searches recent messages without sending email."
+                  />
+                  <CapabilityCard
+                    icon={<CalendarClock className="h-4 w-4" />}
+                    title="Calendar slots"
+                    body="Finds free times before drafting meetings."
+                  />
+                  <CapabilityCard
+                    icon={<CheckCircle2 className="h-4 w-4" />}
+                    title="You approve"
+                    body="Calendar events wait in Action Review first."
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="h-full min-h-0 overflow-y-auto p-4">
+      <div className="mx-auto grid max-w-6xl gap-4">
+        <div className="rounded-[10px] border border-line bg-surface p-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-accent" />
+                <h2 className="font-serif text-2xl tracking-tight">
+                  Inbox assistant
+                </h2>
+              </div>
+              <p className="mt-1 text-sm leading-6 text-muted">
+                Scan recent email, find business items, and turn meeting
+                requests into calendar drafts that you approve.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => void runScan(7)} loading={loading && days === 7}>
+                <Zap className="h-4 w-4" />
+                Scan 7 days
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => void runScan(14)} loading={loading && days === 14}>
+                Scan 14 days
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => void runScan(30)} loading={loading && days === 30}>
+                Scan 30 days
+              </Button>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => {
+                setFilter("meeting_request");
+                if (!scan) void runScan(days);
+              }}
+              className="rounded-[8px] border border-line bg-bg p-3 text-left hover:bg-surface-2"
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <CalendarClock className="h-4 w-4 text-accent" />
+                Find meetings
+              </div>
+              <div className="mt-1 text-xs text-muted">
+                Detect people asking to schedule a call.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFilter("follow_up");
+                if (!scan) void runScan(days);
+              }}
+              className="rounded-[8px] border border-line bg-bg p-3 text-left hover:bg-surface-2"
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <RefreshCw className="h-4 w-4 text-accent" />
+                Find follow-ups
+              </div>
+              <div className="mt-1 text-xs text-muted">
+                Surface messages that need a response.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFilter("deadline");
+                if (!scan) void runScan(days);
+              }}
+              className="rounded-[8px] border border-line bg-bg p-3 text-left hover:bg-surface-2"
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Clock3 className="h-4 w-4 text-accent" />
+                Find deadlines
+              </div>
+              <div className="mt-1 text-xs text-muted">
+                Catch urgent items, due dates, and tasks.
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {err ? <div className="tone-bad rounded-[8px] border px-3 py-2 text-sm">{err}</div> : null}
+        {notice ? <div className="rounded-[8px] border border-good/20 bg-good/5 px-3 py-2 text-sm text-good">{notice}</div> : null}
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+          <section className="rounded-[10px] border border-line bg-surface">
+            <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
+              <div className="text-sm font-semibold">
+                {scan ? `${visibleInsights.length} insight${visibleInsights.length === 1 ? "" : "s"}` : "Ready to scan"}
+              </div>
+              {scan ? (
+                <span className="text-xs text-muted">
+                  scanned {scan.scanned} messages from the last {scan.days} days
+                </span>
+              ) : null}
+              <div className="ml-auto flex flex-wrap gap-1">
+                <FilterPill active={filter === "all"} onClick={() => setFilter("all")}>
+                  All {insights.length || ""}
+                </FilterPill>
+                <FilterPill active={filter === "meeting_request"} onClick={() => setFilter("meeting_request")}>
+                  Meetings {counts.meeting_request || ""}
+                </FilterPill>
+                <FilterPill active={filter === "follow_up"} onClick={() => setFilter("follow_up")}>
+                  Follow-ups {counts.follow_up || ""}
+                </FilterPill>
+                <FilterPill active={filter === "deadline"} onClick={() => setFilter("deadline")}>
+                  Deadlines {counts.deadline || ""}
+                </FilterPill>
+              </div>
+            </div>
+            <div className="grid gap-3 p-3">
+              {loading ? (
+                <div className="grid min-h-[260px] place-items-center text-center text-sm text-muted">
+                  Scanning recent Gmail messages...
+                </div>
+              ) : visibleInsights.length ? (
+                visibleInsights.map((insight) => (
+                  <InsightCard
+                    key={insight.id}
+                    insight={insight}
+                    drafting={drafting === insight.id}
+                    onDraftMeeting={() => void draftMeeting(insight)}
+                    onOpenGmail={onOpenGmail}
+                  />
+                ))
+              ) : (
+                <EmptyBusinessState
+                  icon={<Inbox className="h-10 w-10 text-accent" />}
+                  title={scan ? "No items in this filter" : "Scan your inbox"}
+                  body={
+                    scan
+                      ? "Try another filter or scan a wider date range."
+                      : "Privai will look for meeting requests, follow-ups, deadlines, client questions, invoices, and tasks."
+                  }
+                />
+              )}
+            </div>
+          </section>
+
+          <aside className="grid content-start gap-3">
+            <SideAction
+              icon={<CheckCircle2 className="h-4 w-4" />}
+              title="Action Review"
+              body="Approve drafted calendar events before they are created."
+              onClick={onOpenReview}
+            />
+            <SideAction
+              icon={<Mail className="h-4 w-4" />}
+              title="Manual Gmail search"
+              body="Search a sender, client, or Gmail query directly."
+              onClick={onOpenGmail}
+            />
+            <SideAction
+              icon={<CalendarClock className="h-4 w-4" />}
+              title="Calendar tools"
+              body="Find custom availability or draft a meeting manually."
+              onClick={onOpenCalendar}
+            />
+          </aside>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CapabilityCard({
+  icon,
+  title,
+  body,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div className="rounded-[8px] border border-line bg-bg p-3">
+      <div className="flex items-center gap-2 font-medium">
+        <span className="text-accent">{icon}</span>
+        {title}
+      </div>
+      <p className="mt-1 text-xs leading-5 text-muted">{body}</p>
+    </div>
+  );
+}
+
+function FilterPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "h-7 rounded-full border px-2.5 text-xs",
+        active
+          ? "border-accent bg-accent text-white"
+          : "border-line bg-bg text-muted hover:text-ink",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function InsightCard({
+  insight,
+  drafting,
+  onDraftMeeting,
+  onOpenGmail,
+}: {
+  insight: BusinessEmailInsight;
+  drafting: boolean;
+  onDraftMeeting: () => void;
+  onOpenGmail: () => void;
+}) {
+  const canDraftMeeting = insight.kind === "meeting_request";
+  return (
+    <article className="rounded-[10px] border border-line bg-bg p-4">
+      <div className="flex items-start gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] bg-accent-tint text-accent">
+          <InsightIcon kind={insight.kind} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-ink">{insight.title}</h3>
+            <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", insightTone(insight.kind))}>
+              {insightLabel(insight.kind)}
+            </span>
+            <span className="text-[11px] text-muted">
+              {Math.round((insight.confidence || 0) * 100)}% match
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <UserRound className="h-3.5 w-3.5" />
+              <span className="truncate">{insight.fromName || insight.fromEmail || insight.from}</span>
+            </span>
+            {insight.date ? <span>{formatDateTime(insight.date)}</span> : null}
+          </div>
+          <p className="mt-3 line-clamp-3 text-sm leading-6 text-ink-2">
+            {insight.summary || insight.subject}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {canDraftMeeting ? (
+              <Button type="button" size="sm" loading={drafting} onClick={onDraftMeeting}>
+                <CalendarClock className="h-3.5 w-3.5" />
+                Draft calendar event
+              </Button>
+            ) : null}
+            <Button type="button" size="sm" variant="secondary" onClick={onOpenGmail}>
+              <Mail className="h-3.5 w-3.5" />
+              Open Gmail tools
+            </Button>
+            <span className="inline-flex items-center gap-1 text-xs text-muted">
+              {insight.suggestedAction}
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function InsightIcon({ kind }: { kind: string }) {
+  if (kind === "meeting_request") return <CalendarClock className="h-5 w-5" />;
+  if (kind === "follow_up") return <RefreshCw className="h-5 w-5" />;
+  if (kind === "deadline") return <Clock3 className="h-5 w-5" />;
+  if (kind === "invoice") return <FileText className="h-5 w-5" />;
+  if (kind === "task") return <CheckCircle2 className="h-5 w-5" />;
+  return <AlertCircle className="h-5 w-5" />;
+}
+
+function insightLabel(kind: string) {
+  if (kind === "meeting_request") return "Meeting";
+  if (kind === "follow_up") return "Follow-up";
+  if (kind === "deadline") return "Deadline";
+  if (kind === "invoice") return "Finance";
+  if (kind === "task") return "Task";
+  return "Question";
+}
+
+function insightTone(kind: string) {
+  if (kind === "meeting_request") return "border-accent/30 bg-accent-tint text-accent";
+  if (kind === "deadline") return "border-warn/30 bg-warn/10 text-warn";
+  if (kind === "invoice") return "border-good/30 bg-good/10 text-good";
+  return "border-line bg-surface text-muted";
+}
+
+function SideAction({
+  icon,
+  title,
+  body,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-[10px] border border-line bg-surface p-4 text-left hover:bg-surface-2"
+    >
+      <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+        <span className="text-accent">{icon}</span>
+        {title}
+      </div>
+      <p className="mt-2 text-xs leading-5 text-muted">{body}</p>
     </button>
   );
 }
@@ -558,7 +1030,10 @@ function CalendarWorkspace({ connected }: { connected: boolean }) {
 
   return (
     <section className="h-full min-h-0 overflow-y-auto p-5">
-      <div className="mx-auto grid max-w-4xl gap-4 lg:grid-cols-2">
+      <div className="mx-auto grid max-w-4xl gap-4">
+        <UpcomingCalendarEvents />
+      </div>
+      <div className="mx-auto mt-4 grid max-w-4xl gap-4 lg:grid-cols-2">
         <form onSubmit={findSlots} className="rounded-[10px] border border-line bg-surface p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
             <CalendarClock className="h-4 w-4 text-accent" />
@@ -636,6 +1111,156 @@ function CalendarWorkspace({ connected }: { connected: boolean }) {
       </div>
     </section>
   );
+}
+
+function UpcomingCalendarEvents() {
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [rangeDays, setRangeDays] = useState(14);
+
+  const load = useCallback(
+    (days: number) => {
+      setLoading(true);
+      setErr(null);
+      const now = new Date();
+      const end = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+      board
+        .businessCalendarEvents({
+          timeMin: now.toISOString(),
+          timeMax: end.toISOString(),
+          maxResults: 100,
+        })
+        .then((res) => setEvents(res.events))
+        .catch((e) => setErr((e as Error).message))
+        .finally(() => setLoading(false));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    load(rangeDays);
+  }, [load, rangeDays]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, CalendarEvent[]>();
+    for (const event of events) {
+      const key = (event.start || "").slice(0, 10) || "unscheduled";
+      const list = map.get(key) ?? [];
+      list.push(event);
+      map.set(key, list);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [events]);
+
+  return (
+    <section className="rounded-[10px] border border-line bg-surface p-4">
+      <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
+        <CalendarClock className="h-4 w-4 text-accent" />
+        Upcoming events
+        <div className="ml-auto flex items-center gap-2">
+          {[7, 14, 30, 90].map((days) => (
+            <button
+              key={days}
+              type="button"
+              onClick={() => setRangeDays(days)}
+              className={
+                "rounded-full px-2.5 py-0.5 text-[11px] transition " +
+                (rangeDays === days
+                  ? "bg-accent text-white"
+                  : "border border-line text-muted hover:bg-surface-2 hover:text-ink")
+              }
+            >
+              {days}d
+            </button>
+          ))}
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            loading={loading}
+            onClick={() => load(rangeDays)}
+          >
+            Refresh
+          </Button>
+        </div>
+      </header>
+      {err ? (
+        <div className="tone-bad mb-2 rounded-[8px] border px-3 py-2 text-xs">
+          {err}
+        </div>
+      ) : null}
+      {!loading && !err && events.length === 0 ? (
+        <p className="text-sm text-muted">
+          No events in the next {rangeDays} days.
+        </p>
+      ) : null}
+      <div className="grid gap-3">
+        {grouped.map(([day, list]) => (
+          <div key={day} className="grid gap-1.5">
+            <div className="text-[11px] uppercase tracking-wider text-muted">
+              {formatDayHeading(day)}
+            </div>
+            <div className="grid gap-1.5">
+              {list.map((event) => (
+                <a
+                  key={event.id}
+                  href={event.htmlLink || "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-start gap-3 rounded-[8px] border border-line bg-bg px-3 py-2 transition hover:border-accent/40 hover:bg-surface-2"
+                >
+                  <div className="w-20 shrink-0 text-xs text-muted">
+                    {event.allDay
+                      ? "All day"
+                      : formatClock(event.start) + " – " + formatClock(event.end)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-ink">
+                      {event.summary}
+                    </div>
+                    {event.location ? (
+                      <div className="truncate text-xs text-muted">
+                        {event.location}
+                      </div>
+                    ) : null}
+                    {event.attendees.length ? (
+                      <div className="mt-0.5 truncate text-[11px] text-muted">
+                        {event.attendees.length} attendee
+                        {event.attendees.length === 1 ? "" : "s"}
+                        {event.hangoutLink ? " · video link" : ""}
+                      </div>
+                    ) : null}
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function formatDayHeading(day: string) {
+  if (!day || day === "unscheduled") return "Unscheduled";
+  const date = new Date(day + "T00:00:00");
+  if (Number.isNaN(date.getTime())) return day;
+  return date.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatClock(iso: string) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function ActionReviewWorkspace() {
@@ -816,6 +1441,14 @@ function defaultDatetimeLocal(hoursFromNow: number) {
   const date = new Date(Date.now() + hoursFromNow * 60 * 60 * 1000);
   date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
   return toDatetimeLocal(date.toISOString());
+}
+
+function nextMeetingWindow() {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  start.setMinutes(Math.ceil(start.getMinutes() / 15) * 15, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { start, end };
 }
 
 function toDatetimeLocal(value: string) {

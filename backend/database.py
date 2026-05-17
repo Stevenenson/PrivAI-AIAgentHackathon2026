@@ -175,6 +175,94 @@ def init() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_business_actions_owner_status
                 ON business_actions(owner_uid, status, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS learning_artifacts (
+                id                       TEXT PRIMARY KEY,
+                owner_uid                TEXT NOT NULL,
+                session_id               TEXT NOT NULL,
+                kind                     TEXT NOT NULL,
+                title                    TEXT NOT NULL,
+                payload_json             TEXT NOT NULL,
+                source_material_ids_json TEXT,
+                created_at               REAL NOT NULL,
+                updated_at               REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_artifacts_session
+                ON learning_artifacts(owner_uid, session_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS study_items (
+                id                 TEXT PRIMARY KEY,
+                owner_uid          TEXT NOT NULL,
+                session_id         TEXT NOT NULL,
+                source_material_id TEXT,
+                source_title       TEXT,
+                source_hint        TEXT,
+                source_excerpt     TEXT,
+                type               TEXT NOT NULL,
+                topic              TEXT NOT NULL,
+                prompt             TEXT NOT NULL,
+                answer             TEXT NOT NULL,
+                options_json       TEXT,
+                status             TEXT NOT NULL DEFAULT 'active',
+                due_at             REAL NOT NULL,
+                interval_days      REAL NOT NULL DEFAULT 0,
+                ease_factor        REAL NOT NULL DEFAULT 2.5,
+                repetitions        INTEGER NOT NULL DEFAULT 0,
+                lapses             INTEGER NOT NULL DEFAULT 0,
+                created_at         REAL NOT NULL,
+                updated_at         REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_study_items_session_due
+                ON study_items(owner_uid, session_id, status, due_at);
+            CREATE INDEX IF NOT EXISTS idx_study_items_topic
+                ON study_items(owner_uid, session_id, topic);
+            CREATE TABLE IF NOT EXISTS review_events (
+                id              TEXT PRIMARY KEY,
+                owner_uid       TEXT NOT NULL,
+                session_id      TEXT NOT NULL,
+                study_item_id   TEXT NOT NULL,
+                rating          TEXT NOT NULL,
+                previous_due_at REAL,
+                next_due_at     REAL NOT NULL,
+                interval_days   REAL NOT NULL,
+                ease_factor     REAL NOT NULL,
+                repetitions     INTEGER NOT NULL,
+                created_at      REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(study_item_id) REFERENCES study_items(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_review_events_session_created
+                ON review_events(owner_uid, session_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_review_events_item
+                ON review_events(study_item_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS topic_mastery (
+                id             TEXT PRIMARY KEY,
+                owner_uid      TEXT NOT NULL,
+                session_id     TEXT NOT NULL,
+                topic          TEXT NOT NULL,
+                state          TEXT NOT NULL,
+                score          REAL NOT NULL DEFAULT 0,
+                due_count      INTEGER NOT NULL DEFAULT 0,
+                reviewed_count INTEGER NOT NULL DEFAULT 0,
+                correct_rate   REAL NOT NULL DEFAULT 0,
+                updated_at     REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                UNIQUE(owner_uid, session_id, topic)
+            );
+            CREATE INDEX IF NOT EXISTS idx_topic_mastery_session
+                ON topic_mastery(owner_uid, session_id, state, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS exam_plan (
+                id                   TEXT PRIMARY KEY,
+                owner_uid            TEXT NOT NULL,
+                session_id           TEXT NOT NULL,
+                exam_date            TEXT,
+                daily_target         INTEGER NOT NULL DEFAULT 20,
+                title                TEXT,
+                created_at           REAL NOT NULL,
+                updated_at           REAL NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                UNIQUE(owner_uid, session_id)
+            );
             """
         )
 
@@ -213,6 +301,11 @@ def reassign_owner(uid: str) -> None:
             c.execute("UPDATE messages SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
             c.execute("UPDATE attachments SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
             c.execute("UPDATE learning_materials SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE learning_artifacts SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE study_items SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE review_events SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE topic_mastery SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
+            c.execute("UPDATE exam_plan SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
             c.execute("UPDATE business_actions SET owner_uid = ? WHERE owner_uid = ?", (uid, old_uid))
 
 
@@ -722,6 +815,526 @@ def _row_to_business_action(row: sqlite3.Row) -> dict:
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
+
+
+# ---- Study OS ------------------------------------------------------------
+
+
+def create_learning_artifact(
+    owner_uid: str,
+    session_id: str,
+    kind: str,
+    title: str,
+    payload: dict,
+    source_material_ids: list[str] | None = None,
+) -> dict:
+    aid = str(uuid.uuid4())
+    now = time.time()
+    clean_title = title.strip()[:180] or "Learning artifact"
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO learning_artifacts("
+            "id, owner_uid, session_id, kind, title, payload_json, "
+            "source_material_ids_json, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                aid,
+                owner_uid,
+                session_id,
+                kind.strip()[:40] or "guide",
+                clean_title,
+                json.dumps(payload),
+                json.dumps(source_material_ids or []),
+                now,
+                now,
+            ),
+        )
+        c.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ? AND owner_uid = ?",
+            (now, session_id, owner_uid),
+        )
+    return {
+        "id": aid,
+        "kind": kind.strip()[:40] or "guide",
+        "title": clean_title,
+        "payload": payload,
+        "sourceMaterialIds": source_material_ids or [],
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def list_learning_artifacts(
+    owner_uid: str,
+    session_id: str,
+    kind: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    with _conn() as c:
+        if kind:
+            rows = c.execute(
+                "SELECT * FROM learning_artifacts "
+                "WHERE owner_uid = ? AND session_id = ? AND kind = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (owner_uid, session_id, kind, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM learning_artifacts "
+                "WHERE owner_uid = ? AND session_id = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (owner_uid, session_id, limit),
+            ).fetchall()
+    return [_row_to_learning_artifact(row) for row in rows]
+
+
+def latest_learning_artifact(
+    owner_uid: str,
+    session_id: str,
+    kind: str,
+) -> dict | None:
+    items = list_learning_artifacts(owner_uid, session_id, kind, limit=1)
+    return items[0] if items else None
+
+
+def _row_to_learning_artifact(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "title": row["title"],
+        "payload": _json(row["payload_json"]) or {},
+        "sourceMaterialIds": _json(row["source_material_ids_json"]) or [],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def insert_study_items(
+    owner_uid: str,
+    session_id: str,
+    items: list[dict],
+) -> list[dict]:
+    now = time.time()
+    inserted: list[dict] = []
+    with _conn() as c:
+        for item in items:
+            sid = str(uuid.uuid4())
+            item_type = _normalize_study_item_type(item.get("type"))
+            topic = str(item.get("topic") or "General").strip()[:120] or "General"
+            prompt = str(item.get("prompt") or item.get("front") or "").strip()
+            answer = str(item.get("answer") or item.get("back") or "").strip()
+            if not prompt or not answer:
+                continue
+            options = item.get("options")
+            clean_options = (
+                [str(option).strip() for option in options if str(option).strip()]
+                if isinstance(options, list)
+                else []
+            )
+            c.execute(
+                "INSERT INTO study_items("
+                "id, owner_uid, session_id, source_material_id, source_title, "
+                "source_hint, source_excerpt, type, topic, prompt, answer, "
+                "options_json, status, due_at, interval_days, ease_factor, "
+                "repetitions, lapses, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sid,
+                    owner_uid,
+                    session_id,
+                    _empty_to_none(item.get("sourceMaterialId")),
+                    str(item.get("sourceTitle") or "")[:180],
+                    str(item.get("sourceHint") or "")[:240],
+                    str(item.get("sourceExcerpt") or "")[:1000],
+                    item_type,
+                    topic,
+                    prompt[:2000],
+                    answer[:4000],
+                    json.dumps(clean_options),
+                    "active",
+                    now,
+                    0.0,
+                    2.5,
+                    0,
+                    0,
+                    now,
+                    now,
+                ),
+            )
+            inserted.append(
+                get_study_item_from_connection(c, owner_uid, session_id, sid)
+            )
+        if inserted:
+            c.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ? AND owner_uid = ?",
+                (now, session_id, owner_uid),
+            )
+    return [item for item in inserted if item]
+
+
+def list_study_items(
+    owner_uid: str,
+    session_id: str,
+    include_suspended: bool = False,
+    limit: int = 500,
+) -> list[dict]:
+    status_filter = "" if include_suspended else "AND status != 'suspended'"
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM study_items "
+            "WHERE owner_uid = ? AND session_id = ? "
+            f"{status_filter} "
+            "ORDER BY due_at ASC, created_at ASC LIMIT ?",
+            (owner_uid, session_id, limit),
+        ).fetchall()
+    return [_row_to_study_item(row) for row in rows]
+
+
+def due_study_items(
+    owner_uid: str,
+    session_id: str,
+    now: float | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    cutoff = now if now is not None else time.time()
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM study_items "
+            "WHERE owner_uid = ? AND session_id = ? AND status = 'active' "
+            "AND due_at <= ? ORDER BY due_at ASC, created_at ASC LIMIT ?",
+            (owner_uid, session_id, cutoff, limit),
+        ).fetchall()
+    return [_row_to_study_item(row) for row in rows]
+
+
+def get_study_item(owner_uid: str, session_id: str, item_id: str) -> dict | None:
+    with _conn() as c:
+        return get_study_item_from_connection(c, owner_uid, session_id, item_id)
+
+
+def get_study_item_from_connection(
+    c: sqlite3.Connection,
+    owner_uid: str,
+    session_id: str,
+    item_id: str,
+) -> dict | None:
+    row = c.execute(
+        "SELECT * FROM study_items "
+        "WHERE owner_uid = ? AND session_id = ? AND id = ?",
+        (owner_uid, session_id, item_id),
+    ).fetchone()
+    return _row_to_study_item(row) if row else None
+
+
+def update_study_item(
+    owner_uid: str,
+    session_id: str,
+    item_id: str,
+    patch: dict,
+) -> dict | None:
+    allowed = {
+        "type": ("type", _normalize_study_item_type),
+        "topic": ("topic", lambda v: str(v or "General").strip()[:120] or "General"),
+        "prompt": ("prompt", lambda v: str(v or "").strip()[:2000]),
+        "answer": ("answer", lambda v: str(v or "").strip()[:4000]),
+        "options": ("options_json", lambda v: json.dumps(v if isinstance(v, list) else [])),
+        "sourceHint": ("source_hint", lambda v: str(v or "")[:240]),
+        "sourceExcerpt": ("source_excerpt", lambda v: str(v or "")[:1000]),
+        "status": (
+            "status",
+            lambda v: str(v or "active").strip()
+            if str(v or "active").strip() in {"active", "suspended"}
+            else "active",
+        ),
+    }
+    assignments: list[str] = []
+    values: list[Any] = []
+    for key, (column, cleaner) in allowed.items():
+        if key in patch:
+            assignments.append(f"{column} = ?")
+            values.append(cleaner(patch[key]))
+    if not assignments:
+        return get_study_item(owner_uid, session_id, item_id)
+    values.extend([time.time(), owner_uid, session_id, item_id])
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE study_items SET "
+            + ", ".join(assignments)
+            + ", updated_at = ? WHERE owner_uid = ? AND session_id = ? AND id = ?",
+            values,
+        )
+        if cur.rowcount != 1:
+            return None
+    return get_study_item(owner_uid, session_id, item_id)
+
+
+def delete_study_item(owner_uid: str, session_id: str, item_id: str) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            "DELETE FROM study_items "
+            "WHERE owner_uid = ? AND session_id = ? AND id = ?",
+            (owner_uid, session_id, item_id),
+        )
+        if cur.rowcount:
+            c.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ? AND owner_uid = ?",
+                (time.time(), session_id, owner_uid),
+            )
+        return cur.rowcount == 1
+
+
+def record_review_event(
+    owner_uid: str,
+    session_id: str,
+    item_id: str,
+    rating: str,
+    schedule: dict,
+) -> dict | None:
+    event_id = str(uuid.uuid4())
+    now = time.time()
+    with _conn() as c:
+        item = get_study_item_from_connection(c, owner_uid, session_id, item_id)
+        if not item:
+            return None
+        c.execute(
+            "UPDATE study_items SET due_at = ?, interval_days = ?, "
+            "ease_factor = ?, repetitions = ?, lapses = ?, updated_at = ? "
+            "WHERE owner_uid = ? AND session_id = ? AND id = ?",
+            (
+                float(schedule["dueAt"]),
+                float(schedule["intervalDays"]),
+                float(schedule["easeFactor"]),
+                int(schedule["repetitions"]),
+                int(schedule["lapses"]),
+                now,
+                owner_uid,
+                session_id,
+                item_id,
+            ),
+        )
+        c.execute(
+            "INSERT INTO review_events("
+            "id, owner_uid, session_id, study_item_id, rating, previous_due_at, "
+            "next_due_at, interval_days, ease_factor, repetitions, created_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_id,
+                owner_uid,
+                session_id,
+                item_id,
+                rating,
+                item["dueAt"],
+                float(schedule["dueAt"]),
+                float(schedule["intervalDays"]),
+                float(schedule["easeFactor"]),
+                int(schedule["repetitions"]),
+                now,
+            ),
+        )
+        c.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ? AND owner_uid = ?",
+            (now, session_id, owner_uid),
+        )
+    return {
+        "id": event_id,
+        "studyItemId": item_id,
+        "rating": rating,
+        "previousDueAt": item["dueAt"],
+        "nextDueAt": float(schedule["dueAt"]),
+        "intervalDays": float(schedule["intervalDays"]),
+        "easeFactor": float(schedule["easeFactor"]),
+        "repetitions": int(schedule["repetitions"]),
+        "createdAt": now,
+    }
+
+
+def list_review_events(
+    owner_uid: str,
+    session_id: str,
+    limit: int = 200,
+) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM review_events "
+            "WHERE owner_uid = ? AND session_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (owner_uid, session_id, limit),
+        ).fetchall()
+    return [_row_to_review_event(row) for row in rows]
+
+
+def upsert_topic_mastery(
+    owner_uid: str,
+    session_id: str,
+    topic: str,
+    state: str,
+    score: float,
+    due_count: int,
+    reviewed_count: int,
+    correct_rate: float,
+) -> dict:
+    mid = str(uuid.uuid4())
+    now = time.time()
+    clean_topic = topic.strip()[:120] or "General"
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO topic_mastery("
+            "id, owner_uid, session_id, topic, state, score, due_count, "
+            "reviewed_count, correct_rate, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(owner_uid, session_id, topic) DO UPDATE SET "
+            "state = excluded.state, score = excluded.score, "
+            "due_count = excluded.due_count, reviewed_count = excluded.reviewed_count, "
+            "correct_rate = excluded.correct_rate, updated_at = excluded.updated_at",
+            (
+                mid,
+                owner_uid,
+                session_id,
+                clean_topic,
+                state,
+                score,
+                due_count,
+                reviewed_count,
+                correct_rate,
+                now,
+            ),
+        )
+    return {
+        "topic": clean_topic,
+        "state": state,
+        "score": score,
+        "dueCount": due_count,
+        "reviewedCount": reviewed_count,
+        "correctRate": correct_rate,
+        "updatedAt": now,
+    }
+
+
+def list_topic_mastery(owner_uid: str, session_id: str) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM topic_mastery "
+            "WHERE owner_uid = ? AND session_id = ? "
+            "ORDER BY score ASC, updated_at DESC",
+            (owner_uid, session_id),
+        ).fetchall()
+    return [
+        {
+            "topic": row["topic"],
+            "state": row["state"],
+            "score": row["score"],
+            "dueCount": row["due_count"],
+            "reviewedCount": row["reviewed_count"],
+            "correctRate": row["correct_rate"],
+            "updatedAt": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def get_exam_plan(owner_uid: str, session_id: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM exam_plan WHERE owner_uid = ? AND session_id = ?",
+            (owner_uid, session_id),
+        ).fetchone()
+    return _row_to_exam_plan(row) if row else None
+
+
+def set_exam_plan(
+    owner_uid: str,
+    session_id: str,
+    exam_date: str | None,
+    daily_target: int,
+    title: str | None = None,
+) -> dict:
+    plan_id = str(uuid.uuid4())
+    now = time.time()
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO exam_plan("
+            "id, owner_uid, session_id, exam_date, daily_target, title, "
+            "created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(owner_uid, session_id) DO UPDATE SET "
+            "exam_date = excluded.exam_date, daily_target = excluded.daily_target, "
+            "title = excluded.title, updated_at = excluded.updated_at",
+            (
+                plan_id,
+                owner_uid,
+                session_id,
+                exam_date,
+                max(1, min(int(daily_target or 20), 500)),
+                (title or "").strip()[:160] or None,
+                now,
+                now,
+            ),
+        )
+    return get_exam_plan(owner_uid, session_id) or {
+        "examDate": exam_date,
+        "dailyTarget": daily_target,
+        "title": title or "",
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def _row_to_exam_plan(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "examDate": row["exam_date"],
+        "dailyTarget": row["daily_target"],
+        "title": row["title"] or "",
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def _row_to_study_item(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "sourceMaterialId": row["source_material_id"],
+        "sourceTitle": row["source_title"] or "",
+        "sourceHint": row["source_hint"] or "",
+        "sourceExcerpt": row["source_excerpt"] or "",
+        "type": row["type"],
+        "topic": row["topic"],
+        "prompt": row["prompt"],
+        "answer": row["answer"],
+        "options": _json(row["options_json"]) or [],
+        "status": row["status"],
+        "dueAt": row["due_at"],
+        "intervalDays": row["interval_days"],
+        "easeFactor": row["ease_factor"],
+        "repetitions": row["repetitions"],
+        "lapses": row["lapses"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def _row_to_review_event(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "studyItemId": row["study_item_id"],
+        "rating": row["rating"],
+        "previousDueAt": row["previous_due_at"],
+        "nextDueAt": row["next_due_at"],
+        "intervalDays": row["interval_days"],
+        "easeFactor": row["ease_factor"],
+        "repetitions": row["repetitions"],
+        "createdAt": row["created_at"],
+    }
+
+
+def _normalize_study_item_type(raw: Any) -> str:
+    value = str(raw or "qa").strip().lower()
+    return value if value in {"qa", "cloze", "multiple_choice", "free_response"} else "qa"
+
+
+def _empty_to_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 # ---- runtime kv settings ------------------------------------------------

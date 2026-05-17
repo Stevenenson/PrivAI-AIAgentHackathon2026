@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentActivityPanel } from "@/components/AgentActivityPanel";
 import { ChatStream } from "@/components/ChatStream";
 import { Composer } from "@/components/Composer";
-import { board, streamChat } from "@/lib/board";
+import { type AgentStatusUpdate, board, streamChat } from "@/lib/board";
 import { cn } from "@/lib/cn";
 import { experienceForRequest, useExperience } from "@/lib/experience";
 import type {
@@ -36,6 +36,7 @@ interface Props {
   commandApprovalRequired?: boolean;
   autoApproveReadOnlyCommands?: boolean;
   composerDefaultMode?: ChatMode;
+  composerAgentOnly?: boolean;
   queuedPrompt?: {
     id: string;
     prompt: string;
@@ -43,6 +44,8 @@ interface Props {
     forceSearch?: boolean;
   } | null;
   onQueuedPromptConsumed?: (id: string) => void;
+  onOpenFile?: (path: string) => void;
+  onClose?: () => void;
   className?: string;
 }
 
@@ -62,8 +65,11 @@ export function SpaceAgentPanel({
   commandApprovalRequired,
   autoApproveReadOnlyCommands,
   composerDefaultMode = "agent",
+  composerAgentOnly = false,
   queuedPrompt,
   onQueuedPromptConsumed,
+  onOpenFile,
+  onClose,
   className,
 }: Props) {
   const { prefs, savePrefs } = useExperience();
@@ -79,6 +85,7 @@ export function SpaceAgentPanel({
   const [modelBusy, setModelBusy] = useState(false);
   const [agentEvents, setAgentEvents] = useState<AgentToolEvent[]>([]);
   const [agentHitLimit, setAgentHitLimit] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<AgentStatusUpdate | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const consumedPromptRef = useRef<string | null>(null);
 
@@ -118,6 +125,11 @@ export function SpaceAgentPanel({
   }
 
   useEffect(() => {
+    // Skip when incoming sessionId matches the locally created sid — the URL
+    // just caught up after the first send; aborting would kill the in-flight
+    // stream and drop the user's first message.
+    if (sessionId && sessionId === sid) return;
+
     abortRef.current?.abort();
     let cancel = false;
     const timer = window.setTimeout(() => {
@@ -125,6 +137,7 @@ export function SpaceAgentPanel({
       setStreaming(false);
       setAgentEvents([]);
       setAgentHitLimit(false);
+      setAgentStatus(null);
 
       if (!sessionId) {
         setSid(null);
@@ -149,7 +162,7 @@ export function SpaceAgentPanel({
       cancel = true;
       window.clearTimeout(timer);
     };
-  }, [sessionId]);
+  }, [sessionId, sid]);
 
   const send = useCallback(
     async (
@@ -181,6 +194,9 @@ export function SpaceAgentPanel({
       if (opts.mode === "agent") {
         setAgentEvents([]);
         setAgentHitLimit(false);
+        setAgentStatus({ phase: "thinking", label: "Thinking" });
+      } else {
+        setAgentStatus(null);
       }
       setStreaming(true);
 
@@ -237,8 +253,12 @@ export function SpaceAgentPanel({
             onTool: (event) => {
               setAgentEvents((cur) => upsertToolEvent(cur, event));
             },
+            onStatus: (status) => {
+              setAgentStatus(status);
+            },
             onDone: (assistant) => {
               setPending(null);
+              setAgentStatus(null);
               setAgentHitLimit(
                 /maximum .*terminal tool steps|AGENT_MAX_TOOL_STEPS/i.test(
                   assistant.content || "",
@@ -257,6 +277,7 @@ export function SpaceAgentPanel({
             },
             onError: (message) => {
               setPending(null);
+              setAgentStatus(null);
               setErr(message);
             },
           },
@@ -309,6 +330,17 @@ export function SpaceAgentPanel({
     [],
   );
 
+  const answerAgentQuestion = useCallback(
+    async (questionId: string, answer: string) => {
+      try {
+        await board.answerAgentQuestion(questionId, answer);
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    },
+    [],
+  );
+
   const continueAgent = useCallback(
     (message = "continue from where you stopped") => {
       void send(message, {
@@ -349,8 +381,8 @@ export function SpaceAgentPanel({
     >
       <header className="shrink-0 border-b border-line px-4 py-3">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">{title}</div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold">{title}</div>
             {subtitle ? (
               <div className="mt-0.5 truncate text-xs text-muted">{subtitle}</div>
             ) : null}
@@ -360,7 +392,7 @@ export function SpaceAgentPanel({
               value={activeModel}
               disabled={modelBusy}
               onChange={(e) => void changeModel(e.target.value)}
-              className="h-8 max-w-[190px] rounded-[8px] border border-line bg-bg px-2 text-xs text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:opacity-50"
+              className="h-8 max-w-[160px] rounded-[8px] border border-line bg-bg px-2 text-xs text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:opacity-50"
               title="Change Gemini model for chat"
             >
               {models.map((model) => (
@@ -369,6 +401,17 @@ export function SpaceAgentPanel({
                 </option>
               ))}
             </select>
+          ) : null}
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] text-muted transition hover:bg-surface-2 hover:text-ink"
+              title="Hide agent panel"
+              aria-label="Hide agent panel"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12" /><path d="M6 18L18 6" /></svg>
+            </button>
           ) : null}
         </div>
       </header>
@@ -410,6 +453,7 @@ export function SpaceAgentPanel({
       <ChatStream
         messages={messages}
         pending={pending}
+        agentStatus={streaming ? agentStatus : null}
         emptyTitle={emptyTitle ?? "Agent ready"}
         emptyBody={emptyBody ?? "Ask Privai to plan, research, write files, run checks, or explain the next step."}
         agentEvents={space === "coding" ? agentEvents : undefined}
@@ -422,6 +466,10 @@ export function SpaceAgentPanel({
         onRejectCommand={(approvalId) =>
           void decideCommandApproval(approvalId, false)
         }
+        onAnswerQuestion={(questionId, answer) =>
+          void answerAgentQuestion(questionId, answer)
+        }
+        onOpenFile={onOpenFile}
         showAgentActivityInline={space === "coding"}
         compact
       />
@@ -439,6 +487,7 @@ export function SpaceAgentPanel({
           askBeforeCommands={commandApprovalRequired ?? prefs.askBeforeCommands}
           defaultMode={composerDefaultMode}
           defaultForceSearch={defaultForceSearch}
+          agentOnly={composerAgentOnly}
           compact
         />
       </div>

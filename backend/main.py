@@ -268,12 +268,21 @@ class ApprovalDecision(BaseModel):
     approved: bool
 
 
+class QuestionAnswer(BaseModel):
+    answer: str = Field(..., max_length=2000)
+
+
 class BusinessSettingsPatch(BaseModel):
     privacyMode: str | None = None
     gmailEnabled: bool | None = None
     calendarEnabled: bool | None = None
     requireApprovalForEmailSend: bool | None = None
     requireApprovalForCalendarWrites: bool | None = None
+
+
+class BusinessEmailScanRequest(BaseModel):
+    days: int = Field(default=14, ge=1, le=60)
+    maxResults: int = Field(default=50, ge=1, le=50)
 
 
 class CalendarSlotsRequest(BaseModel):
@@ -309,6 +318,37 @@ class LearningAttachmentMaterialRequest(BaseModel):
 class LearningPracticeRequest(BaseModel):
     kind: str = Field(default="test", min_length=1, max_length=20)
     count: int = Field(default=8, ge=1, le=20)
+
+
+class LearningGuideRequest(BaseModel):
+    materialIds: list[str] | None = None
+
+
+class LearningStudyItemGenerateRequest(BaseModel):
+    materialIds: list[str] | None = None
+    count: int = Field(default=12, ge=1, le=30)
+
+
+class LearningStudyItemPatch(BaseModel):
+    type: str | None = Field(default=None, max_length=40)
+    topic: str | None = Field(default=None, max_length=120)
+    prompt: str | None = Field(default=None, max_length=2000)
+    answer: str | None = Field(default=None, max_length=4000)
+    options: list[str] | None = Field(default=None, max_length=8)
+    sourceHint: str | None = Field(default=None, max_length=240)
+    sourceExcerpt: str | None = Field(default=None, max_length=1000)
+    status: str | None = Field(default=None, max_length=40)
+
+
+class LearningReviewEventRequest(BaseModel):
+    studyItemId: str = Field(..., min_length=1)
+    rating: str = Field(..., min_length=1, max_length=20)
+
+
+class LearningExamPlanRequest(BaseModel):
+    examDate: str | None = Field(default=None, max_length=80)
+    dailyTarget: int = Field(default=20, ge=1, le=500)
+    title: str | None = Field(default=None, max_length=160)
 
 
 class WorkspaceSaveFileRequest(BaseModel):
@@ -1396,9 +1436,11 @@ async def chat_stream(req: ChatRequest, caller: Caller = Depends(require_owner))
                         return True
                     policy = terminal.command_policy(str(event.get("command") or ""))
                     event = {**event, **policy}
-                    if req.autoApproveReadOnlyCommands and policy.get("readOnly"):
-                        return True
                     if not command_approval_required:
+                        return True
+                    if policy.get("autoApprovable"):
+                        return True
+                    if req.autoApproveReadOnlyCommands and policy.get("readOnly"):
                         return True
                     pending = await approvals.command_approvals.create(
                         caller.uid,
@@ -1412,31 +1454,60 @@ async def chat_stream(req: ChatRequest, caller: Caller = Depends(require_owner))
                     })
                     return await approvals.command_approvals.wait(pending.id)
 
+                async def request_user_answer(question: str, options: list[str]) -> str | None:
+                    pending_q = await approvals.question_broker.create(
+                        caller.uid,
+                        question,
+                        options,
+                    )
+                    await tool_events.put({
+                        "name": "request_user_input",
+                        "status": "pending_question",
+                        "questionId": pending_q.id,
+                        "question": question,
+                        "options": options,
+                        "step": 0,
+                        "maxSteps": 0,
+                        "command": f"ask: {question[:120]}",
+                        "cwd": ".",
+                    })
+                    return await approvals.question_broker.wait(pending_q.id)
+
+                yield _sse({
+                    "type": "status",
+                    "phase": "thinking",
+                    "label": "Thinking",
+                })
                 task = asyncio.create_task(
                     orch.complete(
                         prep,
                         on_tool_event=on_tool_event,
                         request_tool_approval=request_tool_approval,
                         owner_uid=caller.uid,
+                        session_id=sid,
+                        request_user_answer=request_user_answer,
                     )
                 )
-                yielded_working = False
                 while True:
                     if task.done():
                         while not tool_events.empty():
-                            yield _sse({"type": "tool", **tool_events.get_nowait()})
+                            event = tool_events.get_nowait()
+                            yield _sse({"type": "tool", **event})
                         full.append(task.result())
+                        yield _sse({"type": "status", "phase": "idle"})
                         break
                     try:
                         event = await asyncio.wait_for(tool_events.get(), 0.25)
                         yield _sse({"type": "tool", **event})
+                        status = _status_from_tool_event(event)
+                        if status:
+                            yield _sse({"type": "status", **status})
                     except asyncio.TimeoutError:
-                        if not yielded_working:
-                            yield _sse({
-                                "type": "delta",
-                                "delta": "_working in the terminal..._\n",
-                            })
-                            yielded_working = True
+                        yield _sse({
+                            "type": "status",
+                            "phase": "thinking",
+                            "label": "Thinking",
+                        })
             else:
                 stream_llm = (
                     llm
@@ -1494,6 +1565,49 @@ async def chat_stream(req: ChatRequest, caller: Caller = Depends(require_owner))
 
 def _sse(obj: dict) -> bytes:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode()
+
+
+_TOOL_PHASE_LABELS = {
+    "run_terminal_command": ("running", "Running"),
+    "read_file": ("running", "Reading"),
+    "write_file": ("running", "Writing"),
+    "apply_patch": ("running", "Patching"),
+    "list_dir": ("running", "Listing"),
+    "grep_workspace": ("running", "Searching"),
+    "start_project_preview": ("running", "Starting preview"),
+    "update_plan": ("planning", "Updating plan"),
+}
+
+
+def _status_from_tool_event(event: dict) -> dict | None:
+    status = str(event.get("status") or "")
+    name = str(event.get("name") or "")
+    if status == "running":
+        phase, label = _TOOL_PHASE_LABELS.get(name, ("running", "Working"))
+        detail = str(event.get("command") or "").strip()
+        if name == "run_terminal_command":
+            label = "Running"
+            detail = detail[:120]
+        elif name in {"read_file", "write_file", "apply_patch"}:
+            detail = str((event.get("command") or "").split("(", 1)[-1].rstrip(")"))
+        elif name == "grep_workspace":
+            detail = detail[:120]
+        return {"phase": phase, "label": label, "detail": detail}
+    if status == "pending_approval":
+        return {
+            "phase": "running",
+            "label": "Waiting for approval",
+            "detail": str(event.get("command") or "")[:120],
+        }
+    if status == "pending_question":
+        return {
+            "phase": "running",
+            "label": "Waiting for your answer",
+            "detail": str(event.get("question") or "")[:160],
+        }
+    if status in {"completed", "failed", "rejected"}:
+        return {"phase": "thinking", "label": "Thinking"}
+    return None
 
 
 # ---- agent preview ------------------------------------------------------
@@ -1581,6 +1695,41 @@ async def business_email_thread(
 ):
     try:
         return await google_workspace.read_email_thread(caller.uid, thread_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/business/email/scan")
+async def business_email_scan(
+    req: BusinessEmailScanRequest,
+    caller: Caller = Depends(require_owner),
+):
+    try:
+        return await google_workspace.scan_recent_email_insights(
+            caller.uid,
+            req.days,
+            req.maxResults,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.get("/business/calendar/events")
+async def business_calendar_events(
+    timeMin: str | None = Query(default=None, max_length=64),
+    timeMax: str | None = Query(default=None, max_length=64),
+    calendarId: str = Query(default="primary", max_length=200),
+    maxResults: int = Query(default=50, ge=1, le=250),
+    caller: Caller = Depends(require_owner),
+):
+    try:
+        return await google_workspace.list_calendar_events(
+            owner_uid=caller.uid,
+            time_min=timeMin,
+            time_max=timeMax,
+            calendar_id=calendarId,
+            max_results=maxResults,
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
@@ -1797,6 +1946,633 @@ async def delete_learning_material(
     return {"ok": True}
 
 
+# ---- Study OS: guide, recall, review, exam plan --------------------------
+
+
+def _selected_learning_materials(
+    owner_uid: str,
+    sid: str,
+    material_ids: list[str] | None = None,
+    include_text: bool = True,
+) -> list[dict]:
+    rows = database.list_learning_materials(owner_uid, sid, include_text=include_text)
+    if material_ids:
+        selected = set(material_ids)
+        rows = [row for row in rows if row["id"] in selected]
+    return rows
+
+
+def _learning_rows_context(rows: list[dict], max_chars: int = 65_000) -> str:
+    if not rows:
+        return ""
+    parts = [
+        "Learning notebook source materials:",
+        (
+            "Use these source materials as the primary truth. Preserve source "
+            "titles, topics, and short source hints in generated artifacts."
+        ),
+    ]
+    used = sum(len(part) for part in parts)
+    for idx, row in enumerate(rows, start=1):
+        excerpt = str(row.get("textExcerpt") or "")
+        excerpt = excerpt[: min(12_000, max(0, max_chars - used))]
+        item = (
+            f"\n\nSource {idx}\n"
+            f"id: {row['id']}\n"
+            f"title: {row['title']}\n"
+            f"mime: {row['mime']}\n"
+            f"status: {row['status']}\n"
+            f"summary:\n{row.get('summary') or 'No summary yet.'}\n"
+        )
+        if excerpt:
+            item += f"excerpt:\n{excerpt}\nend source {idx}"
+        else:
+            item += "excerpt unavailable"
+        parts.append(item)
+        used += len(item)
+        if used >= max_chars:
+            parts.append("\n\n[Context truncated.]")
+            break
+    return "\n".join(parts)
+
+
+def _normalize_guide_payload(data: dict) -> dict:
+    def strings(name: str, limit: int = 12) -> list[str]:
+        raw = data.get(name)
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip()[:500] for item in raw[:limit] if str(item).strip()]
+
+    raw_sections = data.get("sections")
+    sections: list[dict] = []
+    if isinstance(raw_sections, list):
+        for item in raw_sections[:12]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()[:120]
+            summary = str(item.get("summary") or "").strip()[:1200]
+            if not title and not summary:
+                continue
+            sections.append(
+                {
+                    "title": title or "Section",
+                    "summary": summary,
+                    "sourceHint": str(item.get("sourceHint") or "").strip()[:240],
+                }
+            )
+
+    raw_terms = data.get("keyTerms")
+    terms: list[dict] = []
+    if isinstance(raw_terms, list):
+        for item in raw_terms[:20]:
+            if isinstance(item, dict):
+                term = str(item.get("term") or "").strip()[:120]
+                definition = str(item.get("definition") or "").strip()[:600]
+            else:
+                text = str(item).strip()
+                term, _, definition = text.partition(":")
+            if term and definition:
+                terms.append({"term": term, "definition": definition})
+
+    overview = str(data.get("overview") or "").strip()[:1800]
+    if not overview and sections:
+        overview = sections[0]["summary"]
+    return {
+        "overview": overview or "Study guide generated from notebook materials.",
+        "sections": sections,
+        "keyTerms": terms,
+        "misconceptions": strings("misconceptions"),
+        "likelyExamQuestions": strings("likelyExamQuestions", limit=16),
+        "teachBackPrompts": strings("teachBackPrompts", limit=10),
+    }
+
+
+async def _generate_learning_guide(
+    owner_uid: str,
+    sid: str,
+    material_ids: list[str] | None,
+) -> dict:
+    rows = _selected_learning_materials(owner_uid, sid, material_ids)
+    context = _learning_rows_context(rows)
+    if not context:
+        raise HTTPException(
+            status_code=400,
+            detail="add learning materials before creating a study guide",
+        )
+    prompt = f"""
+Create a layered study guide from these source materials.
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "overview": "clear overview paragraph",
+  "sections": [
+    {{"title": "section name", "summary": "high-yield explanation", "sourceHint": "source title/topic"}}
+  ],
+  "keyTerms": [
+    {{"term": "term", "definition": "definition from the materials"}}
+  ],
+  "misconceptions": ["common mistake and correction"],
+  "likelyExamQuestions": ["exam-style question"],
+  "teachBackPrompts": ["prompt the learner can answer out loud"]
+}}
+
+Rules:
+- Stay grounded in the source materials.
+- Make the guide useful for active recall, not passive rereading.
+- Keep source hints short and verifiable.
+
+{context}
+""".strip()
+    try:
+        raw = await llm.chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You create source-grounded study guides as valid JSON only."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            model=runtime.get_model(),
+            response_mime_type="application/json",
+            max_output_tokens=8192,
+        )
+        payload = _normalize_guide_payload(_extract_json_object(raw))
+    except Exception as e:
+        log.warning("study guide generation fell back: %s", e)
+        payload = _normalize_guide_payload(
+            {
+                "overview": "\n\n".join(row.get("summary") or "" for row in rows),
+                "sections": [
+                    {
+                        "title": row["title"],
+                        "summary": row.get("summary") or "No summary available.",
+                        "sourceHint": row["title"],
+                    }
+                    for row in rows[:8]
+                ],
+                "keyTerms": [],
+                "misconceptions": [],
+                "likelyExamQuestions": [],
+                "teachBackPrompts": [],
+            }
+        )
+
+    return database.create_learning_artifact(
+        owner_uid,
+        sid,
+        "guide",
+        "Layered study guide",
+        payload,
+        [row["id"] for row in rows],
+    )
+
+
+def _normalize_study_item_payload(data: dict, rows: list[dict], count: int) -> list[dict]:
+    materials = {row["id"]: row for row in rows}
+    by_title = {str(row["title"]).lower(): row for row in rows}
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        raise ValueError("study item JSON needs an items array")
+
+    cleaned: list[dict] = []
+    allowed_types = {"qa", "cloze", "multiple_choice", "free_response"}
+    for item in raw_items[:count]:
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or "qa").strip().lower()
+        if item_type not in allowed_types:
+            item_type = "qa"
+        prompt = str(item.get("prompt") or item.get("front") or "").strip()
+        answer = str(item.get("answer") or item.get("back") or "").strip()
+        if not prompt or not answer:
+            continue
+        source_id = str(item.get("sourceMaterialId") or "").strip()
+        source_row = materials.get(source_id)
+        if not source_row:
+            title_key = str(item.get("sourceTitle") or "").lower()
+            source_row = by_title.get(title_key)
+            source_id = source_row["id"] if source_row else ""
+        options = item.get("options")
+        cleaned.append(
+            {
+                "type": item_type,
+                "topic": str(item.get("topic") or "General").strip()[:120],
+                "prompt": prompt,
+                "answer": answer,
+                "options": options if isinstance(options, list) else [],
+                "sourceMaterialId": source_id,
+                "sourceTitle": source_row["title"] if source_row else str(item.get("sourceTitle") or ""),
+                "sourceHint": str(item.get("sourceHint") or "").strip()[:240],
+                "sourceExcerpt": str(item.get("sourceExcerpt") or "").strip()[:1000],
+            }
+        )
+    if not cleaned:
+        raise ValueError("study item JSON did not contain usable recall items")
+    return cleaned
+
+
+async def _generate_study_items(
+    owner_uid: str,
+    sid: str,
+    material_ids: list[str] | None,
+    count: int,
+) -> list[dict]:
+    rows = _selected_learning_materials(owner_uid, sid, material_ids)
+    context = _learning_rows_context(rows)
+    if not context:
+        raise HTTPException(
+            status_code=400,
+            detail="add learning materials before generating recall items",
+        )
+    prompt = f"""
+Create {count} high-yield active recall study items from these source materials.
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "items": [
+    {{
+      "type": "qa | cloze | multiple_choice | free_response",
+      "topic": "short topic",
+      "prompt": "front/question/cloze prompt",
+      "answer": "back/correct answer/explanation",
+      "options": ["optional choices for multiple_choice"],
+      "sourceMaterialId": "source id from context",
+      "sourceTitle": "source title",
+      "sourceHint": "short source/topic hint",
+      "sourceExcerpt": "short quote or paraphrase used"
+    }}
+  ]
+}}
+
+Rules:
+- Prefer 8 to 15 high-yield items unless the requested count is lower.
+- Mix qa, cloze, multiple_choice, and free_response when the material supports it.
+- Keep every item grounded in a source and include a sourceMaterialId when possible.
+- Do not invent unsupported facts.
+
+{context}
+""".strip()
+    try:
+        raw = await llm.chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You create editable, source-grounded active recall "
+                        "study items. Return valid JSON only."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            model=runtime.get_model(),
+            response_mime_type="application/json",
+            max_output_tokens=8192,
+        )
+        items = _normalize_study_item_payload(_extract_json_object(raw), rows, count)
+    except Exception as e:
+        log.warning("study item generation fell back: %s", e)
+        items = []
+        for row in rows[:count]:
+            summary = (row.get("summary") or "").strip()
+            if not summary:
+                continue
+            items.append(
+                {
+                    "type": "qa",
+                    "topic": row["title"][:120],
+                    "prompt": f"What are the key ideas in {row['title']}?",
+                    "answer": summary[:1200],
+                    "options": [],
+                    "sourceMaterialId": row["id"],
+                    "sourceTitle": row["title"],
+                    "sourceHint": row["title"],
+                    "sourceExcerpt": summary[:500],
+                }
+            )
+        if not items:
+            raise HTTPException(
+                status_code=502,
+                detail="could not generate recall items from these materials",
+            )
+
+    return database.insert_study_items(owner_uid, sid, items)
+
+
+def _schedule_review(item: dict, rating: str) -> dict:
+    now = time.time()
+    normalized = rating.strip().lower()
+    if normalized not in {"again", "hard", "good", "easy"}:
+        raise HTTPException(status_code=400, detail="rating must be again, hard, good, or easy")
+
+    ease = max(1.3, float(item.get("easeFactor") or 2.5))
+    repetitions = int(item.get("repetitions") or 0)
+    lapses = int(item.get("lapses") or 0)
+    interval = float(item.get("intervalDays") or 0)
+
+    if normalized == "again":
+        lapses += 1
+        repetitions = 0
+        interval = 10 / (24 * 60)
+        due_at = now + 10 * 60
+    elif normalized == "hard":
+        ease = max(1.3, ease - 0.15)
+        repetitions += 1
+        interval = 1.0
+        due_at = now + interval * 86400
+    elif normalized == "good":
+        repetitions += 1
+        if repetitions == 1:
+            interval = 1.0
+        elif repetitions == 2:
+            interval = 3.0
+        else:
+            interval = max(1.0, interval * ease)
+        due_at = now + interval * 86400
+    else:
+        repetitions += 1
+        if repetitions == 1:
+            interval = 4.0
+        else:
+            ease = max(1.3, ease + 0.15)
+            interval = max(4.0, interval * ease)
+        due_at = now + interval * 86400
+
+    return {
+        "dueAt": due_at,
+        "intervalDays": round(interval, 4),
+        "easeFactor": round(ease, 2),
+        "repetitions": repetitions,
+        "lapses": lapses,
+    }
+
+
+def _mastery_state(score: float, reviewed: int) -> str:
+    if reviewed <= 0:
+        return "not_started"
+    if score >= 0.86:
+        return "mastered"
+    if score >= 0.68:
+        return "proficient"
+    if score >= 0.45:
+        return "familiar"
+    return "learning"
+
+
+def _recompute_topic_mastery(owner_uid: str, sid: str) -> list[dict]:
+    items = database.list_study_items(owner_uid, sid, include_suspended=False)
+    now = time.time()
+    grouped: dict[str, list[dict]] = {}
+    for item in items:
+        grouped.setdefault(item.get("topic") or "General", []).append(item)
+
+    mastery: list[dict] = []
+    for topic, topic_items in grouped.items():
+        reviewed = sum(int(item.get("repetitions") or 0) for item in topic_items)
+        lapses = sum(int(item.get("lapses") or 0) for item in topic_items)
+        due_count = sum(1 for item in topic_items if float(item.get("dueAt") or 0) <= now)
+        total_attempts = reviewed + lapses
+        correct_rate = reviewed / total_attempts if total_attempts else 0.0
+        review_depth = min(1.0, reviewed / max(1, len(topic_items) * 3))
+        due_penalty = min(0.3, due_count / max(1, len(topic_items)) * 0.3)
+        score = max(0.0, min(1.0, correct_rate * 0.65 + review_depth * 0.35 - due_penalty))
+        state = _mastery_state(score, reviewed)
+        mastery.append(
+            database.upsert_topic_mastery(
+                owner_uid,
+                sid,
+                topic,
+                state,
+                round(score, 3),
+                due_count,
+                reviewed,
+                round(correct_rate, 3),
+            )
+        )
+    return sorted(mastery, key=lambda item: (item["score"], item["topic"]))
+
+
+def _review_streak(events: list[dict]) -> int:
+    if not events:
+        return 0
+    days = {
+        int((event.get("createdAt") or 0) // 86400)
+        for event in events
+        if event.get("createdAt")
+    }
+    today = int(time.time() // 86400)
+    streak = 0
+    cursor = today
+    while cursor in days:
+        streak += 1
+        cursor -= 1
+    return streak
+
+
+def _learning_dashboard(owner_uid: str, sid: str) -> dict:
+    _ensure_learning_session(owner_uid, sid)
+    materials = database.list_learning_materials(owner_uid, sid)
+    items = database.list_study_items(owner_uid, sid, include_suspended=True)
+    active_items = [item for item in items if item["status"] == "active"]
+    now = time.time()
+    due = [item for item in active_items if item["dueAt"] <= now]
+    new_items = [item for item in active_items if item["repetitions"] == 0]
+    events = database.list_review_events(owner_uid, sid, limit=500)
+    mastery = _recompute_topic_mastery(owner_uid, sid)
+    guide = database.latest_learning_artifact(owner_uid, sid, "guide")
+    exam_plan = database.get_exam_plan(owner_uid, sid)
+    today = int(now // 86400)
+    reviewed_today = sum(1 for event in events if int((event["createdAt"] or 0) // 86400) == today)
+    week_ago = now - 7 * 86400
+    reviewed_week = sum(1 for event in events if (event["createdAt"] or 0) >= week_ago)
+
+    if not materials:
+        next_action = "Add course materials to create this notebook."
+    elif not guide:
+        next_action = "Generate a layered study guide from your sources."
+    elif not active_items:
+        next_action = "Generate editable recall cards for active review."
+    elif due:
+        next_action = f"Review {len(due)} due item{'s' if len(due) != 1 else ''}."
+    else:
+        next_action = "You are caught up. Try a practice test or add more material."
+
+    weak_topics = [
+        item
+        for item in mastery
+        if item["state"] in {"not_started", "learning", "familiar"} or item["dueCount"] > 0
+    ][:6]
+
+    return {
+        "materialsTotal": len(materials),
+        "materialsStudied": sum(1 for item in materials if item.get("status") == "studied"),
+        "studyItemsTotal": len(active_items),
+        "dueCount": len(due),
+        "newCount": len(new_items),
+        "suspendedCount": sum(1 for item in items if item["status"] == "suspended"),
+        "reviewedToday": reviewed_today,
+        "reviewedThisWeek": reviewed_week,
+        "streakDays": _review_streak(events),
+        "nextAction": next_action,
+        "weakTopics": weak_topics,
+        "mastery": mastery,
+        "latestGuide": guide,
+        "examPlan": exam_plan,
+    }
+
+
+@app.get("/learning/{sid}/dashboard")
+async def get_learning_dashboard(
+    sid: str,
+    caller: Caller = Depends(require_owner),
+):
+    return _learning_dashboard(caller.uid, sid)
+
+
+@app.post("/learning/{sid}/guide")
+async def create_learning_guide(
+    sid: str,
+    req: LearningGuideRequest,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    artifact = await _generate_learning_guide(caller.uid, sid, req.materialIds)
+    return {"artifact": artifact, "dashboard": _learning_dashboard(caller.uid, sid)}
+
+
+@app.get("/learning/{sid}/study-items")
+async def get_learning_study_items(
+    sid: str,
+    includeSuspended: bool = Query(default=False),
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    return {
+        "items": database.list_study_items(
+            caller.uid,
+            sid,
+            include_suspended=includeSuspended,
+        )
+    }
+
+
+@app.post("/learning/{sid}/study-items/generate")
+async def generate_learning_study_items(
+    sid: str,
+    req: LearningStudyItemGenerateRequest,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    items = await _generate_study_items(
+        caller.uid,
+        sid,
+        req.materialIds,
+        req.count,
+    )
+    _recompute_topic_mastery(caller.uid, sid)
+    return {"items": items, "dashboard": _learning_dashboard(caller.uid, sid)}
+
+
+@app.patch("/learning/{sid}/study-items/{item_id}")
+async def patch_learning_study_item(
+    sid: str,
+    item_id: str,
+    req: LearningStudyItemPatch,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    item = database.update_study_item(
+        caller.uid,
+        sid,
+        item_id,
+        req.model_dump(exclude_unset=True),
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="study item not found")
+    _recompute_topic_mastery(caller.uid, sid)
+    return item
+
+
+@app.delete("/learning/{sid}/study-items/{item_id}")
+async def delete_learning_study_item(
+    sid: str,
+    item_id: str,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    if not database.delete_study_item(caller.uid, sid, item_id):
+        raise HTTPException(status_code=404, detail="study item not found")
+    _recompute_topic_mastery(caller.uid, sid)
+    return {"ok": True}
+
+
+@app.get("/learning/{sid}/review/queue")
+async def get_learning_review_queue(
+    sid: str,
+    limit: int = Query(default=30, ge=1, le=100),
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    return {"items": database.due_study_items(caller.uid, sid, limit=limit)}
+
+
+@app.post("/learning/{sid}/review/events")
+async def record_learning_review_event(
+    sid: str,
+    req: LearningReviewEventRequest,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    item = database.get_study_item(caller.uid, sid, req.studyItemId)
+    if not item:
+        raise HTTPException(status_code=404, detail="study item not found")
+    rating = req.rating.strip().lower()
+    schedule = _schedule_review(item, rating)
+    event = database.record_review_event(
+        caller.uid,
+        sid,
+        item["id"],
+        rating,
+        schedule,
+    )
+    if not event:
+        raise HTTPException(status_code=404, detail="study item not found")
+    updated = database.get_study_item(caller.uid, sid, item["id"])
+    _recompute_topic_mastery(caller.uid, sid)
+    return {
+        "event": event,
+        "item": updated,
+        "dashboard": _learning_dashboard(caller.uid, sid),
+    }
+
+
+@app.get("/learning/{sid}/exam-plan")
+async def get_learning_exam_plan(
+    sid: str,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    return {"examPlan": database.get_exam_plan(caller.uid, sid)}
+
+
+@app.post("/learning/{sid}/exam-plan")
+async def save_learning_exam_plan(
+    sid: str,
+    req: LearningExamPlanRequest,
+    caller: Caller = Depends(require_owner),
+):
+    _ensure_learning_session(caller.uid, sid)
+    plan = database.set_exam_plan(
+        caller.uid,
+        sid,
+        req.examDate,
+        req.dailyTarget,
+        req.title,
+    )
+    return {"examPlan": plan, "dashboard": _learning_dashboard(caller.uid, sid)}
+
+
 @app.post("/agent/approvals/{approval_id}")
 async def decide_agent_command(
     approval_id: str,
@@ -1842,6 +2618,25 @@ async def reject_agent_command(
     except approvals.ApprovalOwnerMismatch as e:
         raise HTTPException(status_code=403, detail="approval owner mismatch") from e
     return {"ok": True, "approved": False}
+
+
+@app.post("/agent/questions/{question_id}")
+async def answer_agent_question(
+    question_id: str,
+    req: QuestionAnswer,
+    caller: Caller = Depends(require_owner),
+):
+    try:
+        await approvals.question_broker.answer(
+            question_id,
+            caller.uid,
+            req.answer,
+        )
+    except approvals.ApprovalNotFound as e:
+        raise HTTPException(status_code=404, detail="question not found") from e
+    except approvals.ApprovalOwnerMismatch as e:
+        raise HTTPException(status_code=403, detail="question owner mismatch") from e
+    return {"ok": True}
 
 
 @app.post("/agent/preview")

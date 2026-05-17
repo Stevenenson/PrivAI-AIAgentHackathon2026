@@ -110,6 +110,52 @@ _WRITE_HINTS = re.compile(
     re.IGNORECASE,
 )
 
+# Commands whose write effect stays inside the workspace and is reversible via
+# checkpoint. Safe to auto-approve in agent mode so the model can keep momentum.
+_SAFE_WRITE_PATTERNS = (
+    r"^mkdir\s+",
+    r"^touch\s+",
+    r"^cp\s+(?!-[a-zA-Z]*r)",  # no recursive copy without explicit approval
+    r"^mv\s+",
+    r"^npm\s+(install|ci|run\s+(build|lint|test|typecheck|check|dev|start|preview))\b",
+    r"^npm\s+create\s+",
+    r"^npx\s+(?!.*--global)",
+    r"^pnpm\s+(install|add|run\s+(build|lint|test|typecheck|dev|start))\b",
+    r"^yarn\s+(install|add|run\s+\S+|build|lint|test|dev|start)\b",
+    r"^pip\s+install\s+(?!--user|--system)",
+    r"^pip3\s+install\s+(?!--user|--system)",
+    r"^python3?\s+",
+    r"^node\s+",
+    r"^tsc\b",
+    r"^vite\s+(build|preview)\b",
+    r"^next\s+build\b",
+    r"^pytest\b",
+    r"^ruff\s+check\b",
+    r"^cargo\s+(check|test|build)\b",
+    r"^go\s+(test|build|vet|fmt)\b",
+    r"^git\s+(add|status|diff|log|branch\b|show)\b",
+    r"^rm\s+(?!.*-[a-zA-Z]*r|.*\s/)(?:[-\w./@]+\s*)+$",
+)
+
+_AUTO_APPROVE_DENY_PATTERNS = (
+    r"\brm\s+-[a-zA-Z]*r",
+    r"\bgit\s+push\b",
+    r"\bgit\s+reset\s+--hard\b",
+    r"\bgit\s+clean\b",
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\bbrew\b",
+    r"\bnpm\s+publish\b",
+    r"\bpnpm\s+publish\b",
+    r"\byarn\s+publish\b",
+    r"\bpip\s+install.*--system\b",
+    r"--global\b",
+    r"\bchmod\b",
+    r"\bchown\b",
+    r"\bssh\b",
+    r"\bscp\b",
+)
+
 _SNAPSHOT_SKIP_DIRS = {
     ".cache",
     ".git",
@@ -194,6 +240,7 @@ def command_policy(command: str) -> dict[str, object]:
         return {
             "risk": "danger",
             "readOnly": False,
+            "autoApprovable": False,
             "explanation": "This command matches a local safety blocklist.",
         }
     if checked and not _WRITE_HINTS.search(checked):
@@ -202,13 +249,38 @@ def command_policy(command: str) -> dict[str, object]:
                 return {
                     "risk": "read",
                     "readOnly": True,
+                    "autoApprovable": True,
                     "explanation": "This only inspects files, project state, or command output.",
                 }
+    if _is_safe_workspace_write(checked, low):
+        return {
+            "risk": "safe-write",
+            "readOnly": False,
+            "autoApprovable": True,
+            "explanation": (
+                "Workspace-local write: install, build, scaffold, or routine "
+                "file action. Reversible via the next checkpoint."
+            ),
+        }
     return {
         "risk": "write",
         "readOnly": False,
+        "autoApprovable": False,
         "explanation": "This may create, change, install, run, or verify project files.",
     }
+
+
+def _is_safe_workspace_write(checked: str, low: str) -> bool:
+    if not checked:
+        return False
+    if any(re.search(pattern, low) for pattern in _AUTO_APPROVE_DENY_PATTERNS):
+        return False
+    if any(token in checked for token in (";", "|", "&&", "||", ">", "<")):
+        return False
+    for pattern in _SAFE_WRITE_PATTERNS:
+        if re.search(pattern, checked, flags=re.IGNORECASE):
+            return True
+    return False
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:

@@ -157,15 +157,64 @@ def _gemini_tools(tools: list[dict]) -> list[dict[str, Any]]:
     return [{"functionDeclarations": declarations}] if declarations else []
 
 
+_FILE_TOOL_NAMES = {
+    "read_file",
+    "write_file",
+    "apply_patch",
+    "list_dir",
+    "grep_workspace",
+}
+
+
 def _tool_display(name: str, args: dict[str, Any]) -> str:
     if name == "run_terminal_command":
         return str(args.get("command") or "")
+    if name == "start_project_preview":
+        cwd = str(args.get("cwd") or ".")
+        return f"start_project_preview(cwd={cwd})"
+    if name in {"read_file", "write_file", "apply_patch"}:
+        return f"{name}({args.get('path') or ''})"
+    if name == "list_dir":
+        return f"list_dir({args.get('path') or '.'})"
+    if name == "grep_workspace":
+        pattern = str(args.get("pattern") or "")
+        glob = str(args.get("glob") or "")
+        suffix = f" in {glob}" if glob else ""
+        return f"grep_workspace({pattern}{suffix})"
+    if name == "update_plan":
+        steps = args.get("steps") or []
+        return f"update_plan({len(steps)} steps)"
+    if name == "request_user_input":
+        question = str(args.get("question") or "")
+        return f"ask: {question[:120]}"
     clean_args = {
         key: value
         for key, value in args.items()
         if value not in (None, "", [], {})
     }
     return f"{name}({json.dumps(clean_args, ensure_ascii=False)})"
+
+
+def _file_tool_summary(name: str, result: dict[str, Any]) -> str:
+    if name == "read_file":
+        lines = result.get("lines")
+        path = result.get("path") or ""
+        suffix = f" ({lines} lines)" if lines is not None else ""
+        return f"Read {path}{suffix}"
+    if name == "write_file":
+        path = result.get("path") or ""
+        verb = "Created" if result.get("created") else "Wrote"
+        return f"{verb} {path}"
+    if name == "apply_patch":
+        path = result.get("path") or ""
+        return f"Patched {path}"
+    if name == "list_dir":
+        entries = result.get("entries") or []
+        return f"Listed {result.get('path') or '.'} ({len(entries)} entries)"
+    if name == "grep_workspace":
+        matches = result.get("matches") or []
+        return f"Found {len(matches)} matches for `{result.get('pattern') or ''}`"
+    return ""
 
 
 def _tool_finish_event(
@@ -182,10 +231,43 @@ def _tool_finish_event(
     exit_code = result.get("exit_code")
     tool_name = str(call.get("name") or "")
     is_terminal = tool_name == "run_terminal_command"
-    failed = bool(result.get("error")) or result.get("timed_out") or (
-        is_terminal and exit_code not in (0, None)
-    )
-    return {
+    is_preview = tool_name == "start_project_preview"
+    is_file = tool_name in _FILE_TOOL_NAMES
+    is_plan = tool_name == "update_plan"
+
+    if is_file or is_plan:
+        ok = bool(result.get("ok"))
+        exit_code = 0 if ok else 1
+        failed = not ok
+    else:
+        failed = bool(result.get("error")) or result.get("timed_out") or (
+            is_terminal and exit_code not in (0, None)
+        )
+        if is_preview and not result.get("ready"):
+            failed = True
+
+    stdout = result.get("stdout")
+    if not stdout and is_preview:
+        stdout = json.dumps(
+            {
+                key: result.get(key)
+                for key in ("url", "cwd", "path", "command", "ready")
+                if result.get(key) is not None
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    if not stdout and is_file:
+        summary = _file_tool_summary(tool_name, result)
+        stdout = summary or json.dumps(result, ensure_ascii=False)[:1200]
+    if not stdout and is_plan:
+        stdout = json.dumps(
+            {"steps": result.get("steps") or [], "note": result.get("note") or ""},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    event: dict[str, Any] = {
         "id": call.get("call_id") or f"tool-{step}",
         "name": tool_name,
         "status": "failed" if failed else "completed",
@@ -194,7 +276,7 @@ def _tool_finish_event(
         "command": result.get("command") or _tool_display(tool_name, args),
         "cwd": result.get("cwd") or str(args.get("cwd") or "."),
         "exitCode": exit_code,
-        "stdout": result.get("stdout") or (
+        "stdout": stdout or (
             "" if is_terminal else json.dumps(result, ensure_ascii=False, indent=2)
         ),
         "stderr": result.get("stderr") or str(result.get("error") or ""),
@@ -202,6 +284,12 @@ def _tool_finish_event(
         "timedOut": bool(result.get("timed_out")),
         "changedFiles": result.get("changed_files") or [],
     }
+    if is_plan:
+        event["plan"] = {
+            "steps": result.get("steps") or [],
+            "note": result.get("note") or "",
+        }
+    return event
 
 
 def _empty_terminal_command_result(args: dict[str, Any]) -> str:
@@ -231,6 +319,33 @@ def _summarize_tool_result(
         result = json.loads(result_json)
     except json.JSONDecodeError:
         result = {"stderr": result_json, "exit_code": None}
+    name = str(event.get("name") or "")
+    if name == "start_project_preview":
+        return {
+            "name": name,
+            "command": event.get("command") or "start_project_preview",
+            "cwd": result.get("cwd") or event.get("cwd") or ".",
+            "exitCode": 0 if result.get("ready") and not result.get("error") else 1,
+            "stdout": json.dumps(result, ensure_ascii=False)[:1200],
+            "stderr": str(result.get("error") or "")[:1200],
+            "changedFiles": [],
+            "timedOut": False,
+        }
+    if name in _FILE_TOOL_NAMES or name == "update_plan":
+        ok = bool(result.get("ok"))
+        summary = _file_tool_summary(name, result) if name in _FILE_TOOL_NAMES else ""
+        if not summary:
+            summary = json.dumps(result, ensure_ascii=False)[:1200]
+        return {
+            "name": name,
+            "command": event.get("command") or _tool_display(name, {}),
+            "cwd": event.get("cwd") or ".",
+            "exitCode": 0 if ok else 1,
+            "stdout": summary,
+            "stderr": str(result.get("error") or "")[:1200],
+            "changedFiles": result.get("changed_files") or [],
+            "timedOut": False,
+        }
     return {
         "name": event.get("name") or "",
         "command": result.get("command") or event.get("command") or "",
@@ -323,6 +438,7 @@ _DEV_COMMAND_MARKERS = (
     "pnpm dev",
     "yarn dev",
     "vite --host",
+    "start_project_preview",
 )
 
 _WEB_PROJECT_HINTS = (
@@ -399,37 +515,205 @@ def _looks_like_web_project(
     return False
 
 
+def _recent_failed_commands(tool_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for item in tool_history[-12:]:
+        command = str(item.get("command") or "")
+        exit_code = item.get("exitCode")
+        stderr = str(item.get("stderr") or "").strip()
+        if not command:
+            continue
+        if exit_code not in (0, None) or (item.get("timedOut") and stderr):
+            failures.append(item)
+        elif stderr and any(
+            marker in stderr.lower()
+            for marker in ("error", "failed", "cannot find", "not found")
+        ):
+            failures.append(item)
+    return failures
+
+
+_PREMATURE_STOP_PATTERNS = (
+    "reply continue",
+    "say continue",
+    "say 'continue'",
+    "say \"continue\"",
+    "respond with continue",
+    "please reply with",
+    "please reply",
+    "reply with \"",
+    "reply with '",
+    "would you like me to",
+    "shall i continue",
+    "should i continue",
+    "do you want me to continue",
+    "let me know if",
+    "if you'd like me to",
+    "if you would like me to",
+    "process was paused",
+    "system paused",
+    "paused my execution",
+    "i was paused",
+    "execution was paused",
+    "tool execution limit",
+    "tool limit",
+    "i hit the tool limit",
+    "out of steps",
+    "ran out of steps",
+    "rate limit",
+    "before i could",
+    "before i was able",
+    "next steps:",
+    "next step:",
+    "next step for you",
+    "next steps for you",
+    "haven't run",
+    "have not run",
+    "i haven't",
+    "i have not",
+    "i was unable to",
+    "unable to run",
+    "unable to write",
+    "could not write",
+    "could not run",
+    "what failed",
+    "i'll immediately",
+    "i will immediately",
+    "spin up your local",
+    "boot up your local",
+    "not verified",
+    "incomplete",
+    "tool sequence ended",
+    "tool sequence",
+    "to finish the app",
+    "to finish, you",
+    "to finish you",
+    "you will need to",
+    "you'll need to",
+    "final verification",
+    "css styling",
+    "status:",
+    "remaining work",
+    "remaining task",
+    "manually run",
+    "you can run",
+    "please run",
+    "please add",
+    "please paste",
+    "please write",
+    "to complete this",
+    "to complete the",
+)
+
+
+def _plan_has_unfinished_steps(tool_history: list[dict[str, Any]]) -> bool:
+    last_plan: dict[str, Any] | None = None
+    for item in tool_history:
+        if str(item.get("name") or "") != "update_plan":
+            continue
+        try:
+            parsed = json.loads(item.get("stdout") or "{}")
+        except json.JSONDecodeError:
+            continue
+        steps = parsed.get("steps")
+        if isinstance(steps, list) and steps:
+            last_plan = parsed
+    if not last_plan:
+        return False
+    steps = last_plan.get("steps") or []
+    return any(
+        str(step.get("status") or "").lower() not in {"completed", "skipped"}
+        for step in steps
+    )
+
+
+def _premature_stop_prompt(
+    final_text: str,
+    tool_history: list[dict[str, Any]],
+    nudges_sent: int,
+    max_nudges: int,
+) -> str | None:
+    """Catch the model trying to defer to the user instead of working."""
+    if nudges_sent >= max_nudges:
+        return None
+    text = (final_text or "").lower()
+    pattern_hit = any(pattern in text for pattern in _PREMATURE_STOP_PATTERNS) if text else False
+    unfinished_plan = _plan_has_unfinished_steps(tool_history)
+
+    # If the plan still has open steps OR the text shows a defer/pause
+    # pattern, push back — regardless of build status. A vague "shall I
+    # continue?" is never valid even if a build passed.
+    if not pattern_hit and not unfinished_plan:
+        return None
+
+    return (
+        "STOP deferring to the user. There is no pause, no rate limit, no "
+        "tool budget you must negotiate. The phrases 'process was paused', "
+        "'system paused', 'before I could', 'next steps for you', and "
+        "'please reply with' are FORBIDDEN — never write them. "
+        "Continue the task by calling tools. Write any remaining files with "
+        "`write_file` or `apply_patch`. Run the build (`npm run build` for "
+        "Vite/React) and fix any errors with `read_file` + `apply_patch`. "
+        "For web apps, call `start_project_preview` after the build passes. "
+        "Update the plan with `update_plan` as steps complete. Only emit a "
+        "final answer once every plan step is `completed` or `skipped` and "
+        "verification has actually run. Continue now."
+    )
+
+
 def _verification_prompt_if_needed(
     tool_history: list[dict[str, Any]],
     nudges_sent: int,
+    max_nudges: int,
 ) -> str | None:
+    if nudges_sent >= max_nudges:
+        return None
     changed = _changed_project_files(tool_history)
-    if not changed or nudges_sent >= 2:
+    if not changed:
         return None
     has_build = _has_successful_build_check(tool_history)
     is_web_project = _looks_like_web_project(tool_history, changed)
     has_dev = _has_dev_smoke_signal(tool_history) if is_web_project else True
-    if has_build and (has_dev or not is_web_project):
+    failures = _recent_failed_commands(tool_history)
+
+    if has_build and (has_dev or not is_web_project) and not failures:
         return None
 
-    missing = []
+    sample_changed = ", ".join(changed[:8])
+
+    if failures:
+        last = failures[-1]
+        stderr = str(last.get("stderr") or "").strip()[:600]
+        command = str(last.get("command") or "").strip()
+        return (
+            f"Verification is incomplete (nudge {nudges_sent + 1}/{max_nudges}). "
+            f"The last failing step was `{command}` with error:\n{stderr}\n\n"
+            "Do not stop. Read the relevant file with `read_file`, fix the "
+            "issue with `apply_patch` or `write_file`, then rerun the failing "
+            "check. Keep iterating until the build passes or you have a clear "
+            "blocker to report."
+        )
+
+    missing: list[str] = []
     if not has_build:
         if is_web_project:
             missing.append("a successful web verification command, preferably `npm run build`")
         else:
-            missing.append("a successful relevant check command such as tests, lint, typecheck, or compile")
+            missing.append(
+                "a successful relevant check command such as tests, lint, typecheck, or compile"
+            )
     if is_web_project and not has_dev:
-        missing.append("a bounded dev-server smoke check when the project has a dev script")
+        missing.append(
+            "a managed local preview using `start_project_preview` when the project has a dev script"
+        )
     missing_text = " and ".join(missing)
-    sample_changed = ", ".join(changed[:8])
     return (
-        "You changed project files but have not completed required verification yet. "
-        f"Changed files include: {sample_changed}. Before giving a final answer, run "
-        f"{missing_text}. Read stdout/stderr and exit codes. If anything fails, inspect "
-        "the relevant files, fix the issue, and rerun the failing check. For Vite/React, "
-        "make sure local imports like `./App.css` and local image assets exist. For a "
-        "dev-server smoke check, run it with a short timeout; a timeout is acceptable "
-        "only if the output clearly shows the server became ready."
+        f"You changed project files but have not finished verification "
+        f"(nudge {nudges_sent + 1}/{max_nudges}). Changed files include: "
+        f"{sample_changed}. Run {missing_text} now. Read stdout/stderr and "
+        "exit codes. If anything fails, inspect the relevant files with "
+        "`read_file`, fix with `apply_patch` or `write_file`, then rerun. "
+        "Prefer `start_project_preview` over a raw long-running `npm run dev`."
     )
 
 
@@ -497,6 +781,7 @@ class LLMClient:
                 system_instruction=system_instruction,
                 model=active_model,
                 tools=gemini_tools,
+                max_output_tokens=settings.agent_step_max_output_tokens,
             )
             text = _gemini_text_from_response(data)
             if text:
@@ -504,9 +789,24 @@ class LLMClient:
 
             calls = _gemini_function_calls(data)
             if not calls:
+                premature_prompt = _premature_stop_prompt(
+                    text,
+                    tool_history,
+                    verification_nudges,
+                    max(1, settings.agent_max_verification_nudges),
+                )
+                if premature_prompt:
+                    contents.append({
+                        "role": "user",
+                        "parts": [{"text": premature_prompt}],
+                    })
+                    final_text = ""
+                    verification_nudges += 1
+                    continue
                 verification_prompt = _verification_prompt_if_needed(
                     tool_history,
                     verification_nudges,
+                    max(1, settings.agent_max_verification_nudges),
                 )
                 if verification_prompt:
                     contents.append({
@@ -647,7 +947,7 @@ class LLMClient:
                 contents=final_contents,
                 system_instruction=system_instruction,
                 model=model,
-                max_output_tokens=2048,
+                max_output_tokens=settings.agent_step_max_output_tokens,
             )
             text = _gemini_text_from_response(data).strip()
             if text:

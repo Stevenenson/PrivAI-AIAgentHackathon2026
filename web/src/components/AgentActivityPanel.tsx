@@ -3,9 +3,12 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
+  CircleDashed,
   ExternalLink,
   FileCode2,
   FolderTree,
+  ListChecks,
   Play,
   RotateCw,
   SquareTerminal,
@@ -15,7 +18,8 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { board } from "@/lib/board";
-import type { AgentToolEvent, PreviewInfo } from "@/lib/types";
+import { cn } from "@/lib/cn";
+import type { AgentPlan, AgentToolEvent, PreviewInfo } from "@/lib/types";
 
 export function AgentActivityPanel({
   events,
@@ -45,6 +49,7 @@ export function AgentActivityPanel({
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const previewCwd = useMemo(() => inferPreviewCwd(changedFiles), [changedFiles]);
+  const plan = useMemo(() => latestPlan(events), [events]);
 
   if (!events.length && !changedFiles.length && !hitLimit) return null;
 
@@ -86,6 +91,7 @@ export function AgentActivityPanel({
 
         {open ? (
           <div className="border-t border-line p-3 grid gap-3">
+            {plan ? <PlanChecklist plan={plan} /> : null}
             <ProgressTimeline events={events} changedFiles={changedFiles} />
 
             {events.length ? (
@@ -338,6 +344,64 @@ function FileTreeView({ files }: { files: string[] }) {
       ))}
     </div>
   );
+}
+
+function latestPlan(events: AgentToolEvent[]): AgentPlan | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const plan = events[i]?.plan;
+    if (plan && Array.isArray(plan.steps) && plan.steps.length) return plan;
+  }
+  return null;
+}
+
+function PlanChecklist({ plan }: { plan: AgentPlan }) {
+  const done = plan.steps.filter((step) => step.status === "completed").length;
+  return (
+    <div className="grid gap-2 rounded-lg border border-line bg-bg/40 p-3">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <ListChecks className="h-4 w-4 text-accent" />
+        Plan
+        <span className="text-xs text-muted">
+          {done}/{plan.steps.length} done
+        </span>
+      </div>
+      {plan.note ? <div className="text-xs text-muted">{plan.note}</div> : null}
+      <ul className="grid gap-1.5">
+        {plan.steps.map((step, index) => (
+          <li
+            key={`${index}-${step.title}`}
+            className="flex items-start gap-2 text-sm"
+          >
+            <PlanIcon status={step.status} />
+            <span
+              className={cn(
+                "min-w-0 flex-1",
+                step.status === "completed" && "text-muted line-through",
+                step.status === "skipped" && "text-muted italic",
+                step.status === "in_progress" && "text-ink font-medium",
+                step.status === "pending" && "text-muted",
+              )}
+            >
+              {step.title}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PlanIcon({ status }: { status: AgentPlan["steps"][number]["status"] }) {
+  if (status === "completed") {
+    return <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-good" />;
+  }
+  if (status === "in_progress") {
+    return <CircleDashed className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent animate-spin" />;
+  }
+  if (status === "skipped") {
+    return <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />;
+  }
+  return <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />;
 }
 
 function inferPreviewCwd(files: string[]) {

@@ -59,6 +59,7 @@ interface Props {
   defaultMode?: ChatMode;
   defaultForceSearch?: boolean;
   compact?: boolean;
+  agentOnly?: boolean;
 }
 
 const SLASH_COMMANDS: Array<{
@@ -183,10 +184,13 @@ export function Composer({
   defaultMode = "chat",
   defaultForceSearch = false,
   compact = false,
+  agentOnly = false,
 }: Props) {
   const [value, setValue] = useState("");
-  const [forceSearch, setForceSearch] = useState(defaultForceSearch);
-  const [mode, setMode] = useState<ChatMode>(defaultMode);
+  const [forceSearch, setForceSearch] = useState(
+    agentOnly ? false : defaultForceSearch,
+  );
+  const [mode, setMode] = useState<ChatMode>(agentOnly ? "agent" : defaultMode);
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -405,41 +409,50 @@ export function Composer({
               : "border-line focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/15",
           )}
         >
-          <ToggleButton
-            active={forceSearch}
-            onClick={() => setForceSearch((v) => !v)}
-            label="web"
-            title={
-              forceSearch
-                ? "Web search ON — click to turn off"
-                : "Click to keep web search on for following messages"
-            }
-            icon={<Globe2 className="h-3.5 w-3.5" />}
-          />
+          {agentOnly ? null : (
+            <ToggleButton
+              active={forceSearch}
+              onClick={() => setForceSearch((v) => !v)}
+              label="web"
+              title={
+                forceSearch
+                  ? "Web search ON — click to turn off"
+                  : "Click to keep web search on for following messages"
+              }
+              icon={<Globe2 className="h-3.5 w-3.5" />}
+            />
+          )}
           <ToggleButton
             active={mode === "agent"}
-            onClick={() => setMode((v) => (v === "agent" ? "chat" : "agent"))}
+            onClick={() => {
+              if (agentOnly) return;
+              setMode((v) => (v === "agent" ? "chat" : "agent"));
+            }}
             label="agent"
             title={
-              mode === "agent"
-                ? "Agent ON — Privai can create files and run workspace commands. Click to turn off"
-                : "Click to let Privai automate work, create files, build apps, and check results"
+              agentOnly
+                ? "Agent always on in this space"
+                : mode === "agent"
+                  ? "Agent ON — Privai can create files and run workspace commands. Click to turn off"
+                  : "Click to let Privai automate work, create files, build apps, and check results"
             }
             icon={<Sparkles className="h-3.5 w-3.5" />}
           />
-          <ToggleButton
-            active={mode === "convert"}
-            onClick={() =>
-              setMode((v) => (v === "convert" ? "chat" : "convert"))
-            }
-            label="convert"
-            title={
-              mode === "convert"
-                ? "Convert ON — convert files or make a private PDF"
-                : "Click to convert files or generate a local PDF"
-            }
-            icon={<RefreshCw className="h-3.5 w-3.5" />}
-          />
+          {agentOnly ? null : (
+            <ToggleButton
+              active={mode === "convert"}
+              onClick={() =>
+                setMode((v) => (v === "convert" ? "chat" : "convert"))
+              }
+              label="convert"
+              title={
+                mode === "convert"
+                  ? "Convert ON — convert files or make a private PDF"
+                  : "Click to convert files or generate a local PDF"
+              }
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+            />
+          )}
 
           <button
             type="button"

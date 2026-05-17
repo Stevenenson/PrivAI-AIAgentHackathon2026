@@ -26,18 +26,26 @@ export function TerminalPanel({
 
   useEffect(() => {
     if (!hostRef.current) return;
+
+    const readThemeTokens = () => {
+      const styles = getComputedStyle(document.documentElement);
+      const pick = (name: string, fallback: string) =>
+        styles.getPropertyValue(name).trim() || fallback;
+      return {
+        background: pick("--bg", "#0b0d12"),
+        foreground: pick("--ink", "#ececec"),
+        cursor: pick("--accent", "#4f8cff"),
+        selectionBackground: pick("--accent-soft", "#1c2a4f"),
+      };
+    };
+
     const term = new Terminal({
       cursorBlink: true,
       convertEol: true,
       fontFamily:
         'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       fontSize: 12,
-      theme: {
-        background: "#0b0d12",
-        foreground: "#ececec",
-        cursor: "#4f8cff",
-        selectionBackground: "#1c2a4f",
-      },
+      theme: readThemeTokens(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -48,9 +56,19 @@ export function TerminalPanel({
     termRef.current = term;
     fitRef.current = fit;
 
+    const applyTheme = () => {
+      term.options.theme = readThemeTokens();
+    };
+    const themeObs = new MutationObserver(applyTheme);
+    themeObs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "class", "style"],
+    });
+
     const resize = new ResizeObserver(() => fit.fit());
     resize.observe(hostRef.current);
     return () => {
+      themeObs.disconnect();
       resize.disconnect();
       term.dispose();
       termRef.current = null;

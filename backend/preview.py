@@ -48,7 +48,36 @@ async def _stop_existing() -> None:
     _preview_info = None
 
 
-async def _wait_for_url(url: str, timeout_s: float = 8) -> bool:
+START_PROJECT_PREVIEW_TOOL = {
+    "type": "function",
+    "name": "start_project_preview",
+    "description": (
+        "Start or reuse Privai's managed local preview server for a web app "
+        "inside the selected coding workspace. Use this after a web app build "
+        "passes instead of running a long-lived raw `npm run dev` command. "
+        "Pass the project folder that contains package.json or index.html."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "cwd": {
+                "type": "string",
+                "description": (
+                    "Project directory relative to the workspace root. Use `.` "
+                    "when package.json or index.html is at the workspace root."
+                ),
+            },
+        },
+        "required": ["cwd"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+PREVIEW_TOOLS = [START_PROJECT_PREVIEW_TOOL]
+
+
+async def _wait_for_url(url: str, timeout_s: float = 20) -> bool:
     import httpx
 
     deadline = asyncio.get_event_loop().time() + timeout_s
@@ -82,6 +111,11 @@ async def start_preview(cwd: str | None = ".") -> dict:
     project = _resolve_project(cwd)
     if _preview_info and _preview_proc and _preview_proc.returncode is None:
         if Path(_preview_info["path"]) == project:
+            if not _preview_info.get("ready") and _preview_info.get("url"):
+                _preview_info["ready"] = await _wait_for_url(
+                    str(_preview_info["url"]),
+                    timeout_s=5,
+                )
             return _preview_info
         await _stop_existing()
 
@@ -112,6 +146,35 @@ async def start_preview(cwd: str | None = ".") -> dict:
         "ready": ready,
     }
     return _preview_info
+
+
+async def execute_tool(name: str, args: dict) -> str:
+    if name != "start_project_preview":
+        return json.dumps({"error": f"unknown preview tool: {name}"}, ensure_ascii=False)
+    cwd = str(args.get("cwd") or ".")
+    try:
+        info = await start_preview(cwd)
+    except Exception as e:
+        return json.dumps(
+            {
+                "error": str(e),
+                "cwd": cwd,
+                "ready": False,
+            },
+            ensure_ascii=False,
+        )
+    if not info.get("ready"):
+        return json.dumps(
+            {
+                **info,
+                "error": (
+                    "preview server started but did not become ready before "
+                    "the readiness timeout"
+                ),
+            },
+            ensure_ascii=False,
+        )
+    return json.dumps(info, ensure_ascii=False)
 
 
 async def stop_preview() -> dict:

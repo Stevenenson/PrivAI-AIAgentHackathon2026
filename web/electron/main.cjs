@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require("electron");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -9,7 +9,10 @@ const path = require("path");
 const DEFAULT_UI_PORT = 3100;
 const DEFAULT_API_PORT = 8080;
 const HOST = "127.0.0.1";
-const UI_HOST = "localhost";
+// Bind + probe on IPv4 explicitly. With "localhost" Next/Turbopack binds
+// IPv6-only on macOS (::1) but Node's http.get resolves localhost to 127.0.0.1
+// first, so waitForUrl never connects.
+const UI_HOST = "127.0.0.1";
 
 app.setName("Privai");
 
@@ -347,7 +350,7 @@ function startNext() {
   );
 }
 
-function waitForUrl(url, timeoutMs = 30000) {
+function waitForUrl(url, timeoutMs = 180000) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const tick = () => {
@@ -357,12 +360,12 @@ function waitForUrl(url, timeoutMs = 30000) {
       });
       req.on("error", () => {
         if (Date.now() - started > timeoutMs) {
-          reject(new Error(`Timed out waiting for ${url}`));
+          reject(new Error(`Timed out waiting for ${url} after ${Math.round(timeoutMs / 1000)}s`));
         } else {
-          setTimeout(tick, 300);
+          setTimeout(tick, 500);
         }
       });
-      req.setTimeout(1000, () => {
+      req.setTimeout(1500, () => {
         req.destroy();
       });
     };
@@ -610,7 +613,44 @@ function installContextMenu(win) {
   });
 }
 
+function stripFramingHeadersForLocalhost() {
+  // Local dev servers (Next, Vite, CRA, Flask debug) sometimes send
+  // X-Frame-Options or a frame-ancestors CSP that blocks embedding the
+  // in-app preview. Strip those only for 127.0.0.1 / localhost responses so
+  // the Coding preview pane can iframe the dev server.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const url = details.url || "";
+    const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(url);
+    if (!isLocal) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
+    const headers = { ...details.responseHeaders };
+    for (const key of Object.keys(headers)) {
+      const lower = key.toLowerCase();
+      if (lower === "x-frame-options") {
+        delete headers[key];
+      } else if (lower === "content-security-policy") {
+        const values = Array.isArray(headers[key]) ? headers[key] : [headers[key]];
+        const cleaned = values
+          .map((value) =>
+            String(value)
+              .split(";")
+              .map((part) => part.trim())
+              .filter((part) => !/^frame-ancestors\b/i.test(part))
+              .join("; "),
+          )
+          .filter(Boolean);
+        if (cleaned.length) headers[key] = cleaned;
+        else delete headers[key];
+      }
+    }
+    callback({ responseHeaders: headers });
+  });
+}
+
 app.whenReady().then(() => {
+  stripFramingHeadersForLocalhost();
   ipcMain.handle("privai:choose-workspace", chooseWorkspace);
   ipcMain.handle("privai:create-workspace", createWorkspace);
   ipcMain.handle("privai:set-workspace", (_event, workspaceRoot) =>

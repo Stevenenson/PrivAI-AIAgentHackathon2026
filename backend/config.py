@@ -75,7 +75,10 @@ class Settings:
         os.getenv("TERMINAL_MAX_OUTPUT_CHARS", "20000")
     )
     terminal_allow_dangerous: bool = _env_bool("TERMINAL_ALLOW_DANGEROUS", False)
-    agent_max_tool_steps: int = int(os.getenv("AGENT_MAX_TOOL_STEPS", "20"))
+    agent_max_tool_steps: int = int(os.getenv("AGENT_MAX_TOOL_STEPS", "300"))
+    agent_max_verification_nudges: int = int(
+        os.getenv("AGENT_MAX_VERIFICATION_NUDGES", "20")
+    )
     agent_command_approval_required: bool = _env_bool(
         "AGENT_COMMAND_APPROVAL_REQUIRED",
         True,
@@ -95,9 +98,12 @@ class Settings:
         "GOOGLE_REDIRECT_URI",
         "http://127.0.0.1:8080/google/oauth/callback",
     )
-    llm_timeout_s: float = float(os.getenv("LLM_TIMEOUT_S", "180"))
+    llm_timeout_s: float = float(os.getenv("LLM_TIMEOUT_S", "600"))
     llm_num_ctx: int = int(os.getenv("LLM_NUM_CTX", "8192"))
-    llm_num_predict: int = int(os.getenv("LLM_NUM_PREDICT", "2048"))
+    llm_num_predict: int = int(os.getenv("LLM_NUM_PREDICT", "8192"))
+    agent_step_max_output_tokens: int = int(
+        os.getenv("AGENT_STEP_MAX_OUTPUT_TOKENS", "8192")
+    )
     llm_think: bool = _env_bool("LLM_THINK", False)
     llm_keep_alive: str = os.getenv("LLM_KEEP_ALIVE", "30m")
 

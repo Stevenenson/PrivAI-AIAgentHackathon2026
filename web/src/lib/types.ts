@@ -80,15 +80,76 @@ export interface BusinessEmailMessage {
   text?: string;
 }
 
+export interface BusinessEmailInsight {
+  id: string;
+  kind:
+    | "meeting_request"
+    | "follow_up"
+    | "deadline"
+    | "invoice"
+    | "task"
+    | "client_question"
+    | string;
+  title: string;
+  summary: string;
+  suggestedAction: string;
+  confidence: number;
+  messageId?: string | null;
+  threadId?: string | null;
+  subject: string;
+  from: string;
+  fromName?: string;
+  fromEmail?: string;
+  date?: string;
+  attendees?: string[];
+  durationMinutes?: number | null;
+  proposedTitle?: string;
+  proposedDescription?: string;
+}
+
+export interface BusinessEmailScanResult {
+  query: string;
+  days: number;
+  scanned: number;
+  insights: BusinessEmailInsight[];
+  generatedAt: number;
+}
+
 export interface CalendarSlot {
   start: string;
   end: string;
 }
 
+export interface CalendarEventAttendee {
+  email: string;
+  displayName: string;
+  responseStatus: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  summary: string;
+  description: string;
+  location: string;
+  htmlLink: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  attendees: CalendarEventAttendee[];
+  organizer: string;
+  hangoutLink: string;
+}
+
 export interface AgentToolEvent {
   id: string;
   name: string;
-  status: "pending_approval" | "running" | "completed" | "failed" | "rejected";
+  status:
+    | "pending_approval"
+    | "pending_question"
+    | "running"
+    | "completed"
+    | "failed"
+    | "rejected";
   step: number;
   maxSteps: number;
   command: string;
@@ -100,9 +161,25 @@ export interface AgentToolEvent {
   durationS?: number;
   timedOut?: boolean;
   changedFiles?: string[];
-  risk?: "read" | "write" | "danger";
+  risk?: "read" | "write" | "danger" | "safe-write";
   readOnly?: boolean;
   explanation?: string;
+  plan?: AgentPlan;
+  questionId?: string;
+  question?: string;
+  options?: string[];
+}
+
+export type AgentPlanStatus = "pending" | "in_progress" | "completed" | "skipped";
+
+export interface AgentPlanStep {
+  title: string;
+  status: AgentPlanStatus;
+}
+
+export interface AgentPlan {
+  steps: AgentPlanStep[];
+  note?: string;
 }
 
 export interface PreviewInfo {
@@ -154,6 +231,94 @@ export interface LearningPracticeSet {
   createdAt: number;
 }
 
+export interface LearningGuidePayload {
+  overview: string;
+  sections: Array<{ title: string; summary: string; sourceHint?: string }>;
+  keyTerms: Array<{ term: string; definition: string }>;
+  misconceptions: string[];
+  likelyExamQuestions: string[];
+  teachBackPrompts: string[];
+}
+
+export interface LearningArtifact {
+  id: string;
+  kind: "guide" | string;
+  title: string;
+  payload: LearningGuidePayload | Record<string, unknown>;
+  sourceMaterialIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LearningStudyItem {
+  id: string;
+  sourceMaterialId?: string | null;
+  sourceTitle: string;
+  sourceHint: string;
+  sourceExcerpt: string;
+  type: "qa" | "cloze" | "multiple_choice" | "free_response";
+  topic: string;
+  prompt: string;
+  answer: string;
+  options: string[];
+  status: "active" | "suspended";
+  dueAt: number;
+  intervalDays: number;
+  easeFactor: number;
+  repetitions: number;
+  lapses: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LearningReviewEvent {
+  id: string;
+  studyItemId: string;
+  rating: "again" | "hard" | "good" | "easy";
+  previousDueAt?: number | null;
+  nextDueAt: number;
+  intervalDays: number;
+  easeFactor: number;
+  repetitions: number;
+  createdAt: number;
+}
+
+export interface LearningTopicMastery {
+  topic: string;
+  state: "not_started" | "learning" | "familiar" | "proficient" | "mastered";
+  score: number;
+  dueCount: number;
+  reviewedCount: number;
+  correctRate: number;
+  updatedAt: number;
+}
+
+export interface LearningExamPlan {
+  id: string;
+  examDate?: string | null;
+  dailyTarget: number;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LearningDashboard {
+  materialsTotal: number;
+  materialsStudied: number;
+  studyItemsTotal: number;
+  dueCount: number;
+  newCount: number;
+  suspendedCount: number;
+  reviewedToday: number;
+  reviewedThisWeek: number;
+  streakDays: number;
+  nextAction: string;
+  weakTopics: LearningTopicMastery[];
+  mastery: LearningTopicMastery[];
+  latestGuide?: LearningArtifact | null;
+  examPlan?: LearningExamPlan | null;
+}
+
 export interface WorkspaceItem {
   name: string;
   path: string;
@@ -190,7 +355,7 @@ export interface WorkspaceTerminalResult {
   timed_out: boolean;
   stdout_truncated?: boolean;
   stderr_truncated?: boolean;
-  risk?: "read" | "write" | "danger";
+  risk?: "read" | "write" | "danger" | "safe-write";
   readOnly?: boolean;
   explanation?: string;
 }
