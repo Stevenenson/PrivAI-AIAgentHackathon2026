@@ -7,6 +7,14 @@ local SQLite on the device.
 The Electron app is the main product surface. The backend remains portable so
 the same core can later run on a local server or RISC-V board.
 
+## 🎬 Demo
+
+[![PrivAI Demo](https://img.youtube.com/vi/CqVDxY8nz9A/maxresdefault.jpg)](https://youtu.be/CqVDxY8nz9A)
+
+> **▶ Watch the 3-minute demo** — privacy-first AI workspace with on-device storage, PII redaction, web search, and agent terminal tools.
+
+Built at the **AI Agent Olympics** during [Milan AI Week 2026](https://www.milanaiweek.com/) at Fiera Milano — a 7-day hackathon hosted by lablab.ai ($32K+ prize pool). Team of 4, hybrid build (online + on-site).
+
 ## Architecture
 
 Storage posture: chat history lives on the device in SQLite. Firebase is used
